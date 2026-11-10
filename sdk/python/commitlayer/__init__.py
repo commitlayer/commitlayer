@@ -29,7 +29,7 @@ import urllib.error
 import urllib.request
 import uuid
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Any
 
 __all__ = ["Client", "CommitLayerError", "__version__"]
@@ -47,7 +47,7 @@ class CommitLayerError(RuntimeError):
 
 
 def _now() -> str:
-    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 class Client:
