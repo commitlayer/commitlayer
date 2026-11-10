@@ -1,6 +1,6 @@
 {
   "name": "commitlayer",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "CommitLayer JavaScript SDK: record agent actions, push facts, read verdicts, draft contracts",
   "license": "MIT",
   "type": "module",

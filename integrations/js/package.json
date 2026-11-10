@@ -1,6 +1,6 @@
 {
   "name": "@commitlayer/integrations",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "CommitLayer integrations for workflow engines: record Temporal activities and Inngest steps as actions before they run, and gate workflow completion on the verdict",
   "license": "MIT",
   "type": "module",
