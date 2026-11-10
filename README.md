@@ -34,7 +34,7 @@ the final evidence.
 
 ## Development
 
-Python 3.10+ and Node 18+. The Python tests run without any framework or runtime SDK installed; the two optional
+Python 3.10+ and Node 20+. The Python tests run without any framework or runtime SDK installed; the two optional
 runtimes are needed only for their own test files.
 
 ```bash

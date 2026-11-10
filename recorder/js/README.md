@@ -3,7 +3,7 @@
 A small stdio proxy that sits between an MCP client (Claude Desktop, Claude Code, Cursor, an agent framework)
 and any downstream MCP server (a Stripe server, a Zendesk server, your own). It forwards every JSON-RPC message
 unchanged in both directions and, when the client calls a mapped tool, records the intent as a CommitLayer
-action **before** forwarding the call. Zero runtime dependencies; Node 18+.
+action **before** forwarding the call. Zero runtime dependencies; Node 20+.
 
 The agent may declare its intent. It may read the verdict. It must never control the independent facts, the
 governing contract, or the final evidence.

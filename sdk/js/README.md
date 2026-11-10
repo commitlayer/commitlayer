@@ -1,7 +1,7 @@
 # commitlayer (JavaScript / TypeScript)
 
 Record agent actions, push facts from systems of record, read verdicts and draft contracts. Zero runtime
-dependencies; Node 18+ (uses the global `fetch`). Ships with TypeScript types.
+dependencies; Node 20+ (uses the global `fetch` and `crypto`). Ships with TypeScript types.
 
 ```bash
 npm install commitlayer

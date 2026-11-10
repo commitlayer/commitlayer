@@ -2,7 +2,7 @@
 
 CommitLayer for workflow engines. Two subpaths, one package, zero runtime dependencies beyond the engine you
 already run (`@temporalio/*` and `inngest` are optional peer dependencies; the matching SDK is loaded lazily, so
-the package installs and works with either one present). Node 18+, ESM, TypeScript types included.
+the package installs and works with either one present). Node 20+, ESM, TypeScript types included.
 
 | Subpath | What it adds |
 |---|---|
