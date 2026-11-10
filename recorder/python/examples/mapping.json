@@ -1,0 +1,22 @@
+{
+  "agent_id": "support-bot",
+  "workflow_id": "refunds",
+  "tools": {
+    "refund_payment": {
+      "contract_id": "refund_workflow",
+      "action_type": "refund_order",
+      "subject": "arguments.order_id",
+      "subject_kind": "order",
+      "params": {"amount": "arguments.amount", "currency": "arguments.currency"},
+      "action_id": "refund:{arguments.order_id}",
+      "compensates": "arguments.original_action_id"
+    },
+    "zendesk.update_ticket": {
+      "contract_id": "ticket_update",
+      "action_type": "update_ticket",
+      "subject": "arguments.ticket_id",
+      "subject_kind": "ticket",
+      "params": {"status": "arguments.status"}
+    }
+  }
+}

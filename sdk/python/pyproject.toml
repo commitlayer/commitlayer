@@ -1,0 +1,34 @@
+[project]
+name = "commitlayer"
+version = "0.1.1"
+description = "CommitLayer Python SDK: record agent actions, push facts, read verdicts, draft contracts"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Asterfold Labs, Inc.", email = "hello@commitlayer.ai" }]
+keywords = ["ai-agents", "verification", "audit", "mcp", "observability"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Software Development :: Libraries",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://commitlayer.ai"
+Documentation = "https://commitlayer.ai/docs"
+Changelog = "https://commitlayer.ai/changelog"
+Source = "https://github.com/commitlayer/commitlayer/tree/main/sdk/python"
+
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["commitlayer*"]

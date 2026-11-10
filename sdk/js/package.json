@@ -1,0 +1,50 @@
+{
+  "name": "commitlayer",
+  "version": "0.1.1",
+  "description": "CommitLayer JavaScript SDK: record agent actions, push facts, read verdicts, draft contracts",
+  "license": "MIT",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "tsc -p tsconfig.test.json && node --test \"dist-test/test/**/*.test.js\""
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "typescript": "^5.9.3"
+  },
+  "homepage": "https://commitlayer.ai/docs",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/commitlayer/commitlayer.git",
+    "directory": "sdk/js"
+  },
+  "bugs": {
+    "url": "https://commitlayer.ai/contact"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "ai-agents",
+    "verification",
+    "audit",
+    "mcp",
+    "observability"
+  ]
+}

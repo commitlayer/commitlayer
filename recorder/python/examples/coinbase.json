@@ -1,0 +1,14 @@
+{
+  "agent_id": "trading-agent",
+  "workflow_id": "coinbase-trades",
+  "tools": {
+    "orders_create": {
+      "contract_id": "coinbase_agent_trade",
+      "action_type": "place_order",
+      "subject": "arguments.product_id",
+      "subject_kind": "product",
+      "params": {"amount": "arguments.quote_size", "side": "arguments.side", "client_order_id": "arguments.client_order_id"},
+      "action_id": "trade:{arguments.client_order_id}"
+    }
+  }
+}

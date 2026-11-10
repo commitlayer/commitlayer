@@ -1,0 +1,81 @@
+{
+  "name": "@commitlayer/integrations",
+  "version": "0.1.1",
+  "description": "CommitLayer integrations for workflow engines: record Temporal activities and Inngest steps as actions before they run, and gate workflow completion on the verdict",
+  "license": "MIT",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./temporal": {
+      "types": "./dist/temporal.d.ts",
+      "import": "./dist/temporal.js"
+    },
+    "./inngest": {
+      "types": "./dist/inngest.d.ts",
+      "import": "./dist/inngest.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "tsc -p tsconfig.test.json && node --test \"dist-test/test/**/*.test.js\""
+  },
+  "dependencies": {
+    "commitlayer": "^0.1.0"
+  },
+  "peerDependencies": {
+    "@temporalio/activity": ">=1.8.0",
+    "@temporalio/worker": ">=1.8.0",
+    "inngest": ">=3.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@temporalio/activity": {
+      "optional": true
+    },
+    "@temporalio/worker": {
+      "optional": true
+    },
+    "inngest": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@temporalio/activity": "^1.24.0",
+    "@temporalio/worker": "^1.24.0",
+    "@temporalio/workflow": "^1.24.0",
+    "@types/node": "^22.20.5",
+    "inngest": "^4.24.0",
+    "typescript": "^5.9.3"
+  },
+  "homepage": "https://commitlayer.ai/docs",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/commitlayer/commitlayer.git",
+    "directory": "integrations/js"
+  },
+  "bugs": {
+    "url": "https://commitlayer.ai/contact"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "ai-agents",
+    "verification",
+    "audit",
+    "mcp",
+    "observability"
+  ]
+}

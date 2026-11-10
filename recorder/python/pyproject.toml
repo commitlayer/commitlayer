@@ -1,0 +1,40 @@
+[project]
+name = "commitlayer-mcp-recorder"
+version = "0.1.1"
+description = "CommitLayer MCP Recorder: a stdio proxy that records an agent's MCP tool calls as CommitLayer actions"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Asterfold Labs, Inc.", email = "hello@commitlayer.ai" }]
+keywords = ["ai-agents", "verification", "audit", "mcp", "observability"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Software Development :: Libraries",
+]
+dependencies = []
+
+[project.optional-dependencies]
+yaml = ["pyyaml>=6.0"]
+
+[project.scripts]
+commitlayer-mcp-recorder = "commitlayer_mcp_recorder.__main__:main"
+
+[project.urls]
+Homepage = "https://commitlayer.ai"
+Documentation = "https://commitlayer.ai/docs"
+Changelog = "https://commitlayer.ai/changelog"
+Source = "https://github.com/commitlayer/commitlayer/tree/main/recorder/python"
+
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["commitlayer_mcp_recorder*"]
