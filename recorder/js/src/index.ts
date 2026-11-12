@@ -19,7 +19,7 @@ import { readFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 import type { Readable, Writable } from "node:stream";
 
-export const VERSION = "0.1.0";
+export const VERSION = "0.1.3";
 
 export type Json = Record<string, unknown>;
 

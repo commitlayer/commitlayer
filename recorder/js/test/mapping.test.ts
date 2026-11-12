@@ -36,7 +36,7 @@ const refundRule: ToolRule = {
 };
 
 test("version", () => {
-  assert.equal(VERSION, "0.1.0");
+  assert.equal(VERSION, "0.1.3");
 });
 
 // ---------------- loadMapping / parseMapping ----------------

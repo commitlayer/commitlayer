@@ -48,7 +48,7 @@ __all__ = [
     "post_action",
     "resolve_path",
 ]
-__version__ = "0.1.0"
+__version__ = "0.1.2"
 
 DEFAULT_API_URL = "https://api.commitlayer.ai"
 LOG_PREFIX = "commitlayer-recorder: "
