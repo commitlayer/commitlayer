@@ -253,7 +253,12 @@ def build_action(
     ``mcp:{tool}:{request id}``, so a retried request updates one record instead of creating two. Raises
     ``UnresolvedPath`` when the subject or an ``action_id`` placeholder is absent from the call.
     """
-    subject = resolve_path(call_params, tool.subject)
+    if "{" in tool.subject:
+        # A template such as ``zendesk_ticket_{arguments.ticket_id}``: the connector's subject for a help-desk
+        # ticket carries a prefix the tool call does not, so the mapping spells it out.
+        subject = _render_template(tool.subject, call_params)
+    else:
+        subject = resolve_path(call_params, tool.subject)
     if subject is None or str(subject) == "":
         raise UnresolvedPath(tool.subject)
     params: dict[str, Any] = {}

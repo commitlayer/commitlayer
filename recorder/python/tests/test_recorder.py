@@ -368,6 +368,26 @@ def test_compensates_path_is_carried(tmp_path: Path, api: FakeApi) -> None:
     assert api.requests[0].body["action_id"] == "refund:o9"
 
 
+def test_subject_template_spells_out_the_systems_prefix(tmp_path: Path, api: FakeApi) -> None:
+    mapping = {
+        "tools": {
+            "zendesk.update_ticket": {
+                "contract_id": "scop_resolve_customer_case",
+                "subject": "zendesk_ticket_{arguments.ticket_id}",
+                "subject_kind": "ticket",
+                "action_id": "resolve:zendesk_ticket_{arguments.ticket_id}",
+            }
+        }
+    }
+    run_recorder(tmp_path, [call(12, "update_ticket", {"ticket_id": 4411, "status": "solved"})], api_url=api.url, mapping=mapping)
+    assert api.requests[0].body["subject_id"] == "zendesk_ticket_4411"
+    assert api.requests[0].body["action_id"] == "resolve:zendesk_ticket_4411"
+    # a template whose path is absent is treated like a missing subject: forwarded, not recorded
+    run = run_recorder(tmp_path, [call(13, "update_ticket", {"status": "solved"})], api_url=api.url, mapping=mapping)
+    assert len(api.requests) == 1 and run.response(13)["result"]["isError"] is False
+    assert any("forwarded without recording" in d for d in run.diagnostics)
+
+
 def test_missing_subject_is_forwarded_without_recording(tmp_path: Path, api: FakeApi) -> None:
     line = call(10, "refund_payment", {"amount": 5})
     run = run_recorder(tmp_path, [line], api_url=api.url)

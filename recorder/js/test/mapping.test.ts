@@ -193,6 +193,21 @@ test("buildAction: defaults, string ids, numeric subject, optional keys absent",
   }
 });
 
+test("buildAction: a subject template spells out the system of record's prefix", () => {
+  const rule: ToolRule = {
+    contract_id: "scop_resolve_customer_case",
+    subject: "zendesk_ticket_{arguments.ticket_id}",
+    action_id: "resolve:zendesk_ticket_{arguments.ticket_id}",
+  };
+  const body = buildAction(rule, { name: "update_ticket", arguments: { ticket_id: 4411 } }, { requestId: 1 });
+  assert.equal(body.subject_id, "zendesk_ticket_4411");
+  assert.equal(body.action_id, "resolve:zendesk_ticket_4411");
+  assert.throws(
+    () => buildAction(rule, { name: "update_ticket", arguments: {} }, { requestId: 2 }),
+    (e: unknown) => e instanceof PathError,
+  );
+});
+
 test("buildAction: the same request id gives the same action id (retries update one record)", () => {
   const rule: ToolRule = { contract_id: "c", subject: "arguments.id" };
   const a = buildAction(rule, { name: "t", arguments: { id: "x" } }, { requestId: 1 });

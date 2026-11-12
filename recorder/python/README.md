@@ -95,6 +95,8 @@ The proxy exits when the client closes stdin or the downstream server exits, wit
   `arguments.order_id`, `name`, `_meta.progressToken`, `arguments.items.0`.
 - `action_id` is a template with `{path}` placeholders. Without it the id is `mcp:{tool}:{request id}`, so a
   retried request updates one record instead of creating two.
+- `subject` may also be a template (`zendesk_ticket_{arguments.ticket_id}`) when the system of record's subject
+  carries a prefix the tool call does not; a plain path is used as is (since 0.1.2).
 - `contract_version` (integer), `action_type` and `subject_kind` are passed through.
 - A `params` path that is absent from the call is skipped; an absent `compensates` path is omitted. An absent
   `subject` (or `action_id` placeholder) means the call is forwarded **but not recorded**, with a warning.

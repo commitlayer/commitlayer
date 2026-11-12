@@ -83,7 +83,7 @@ Only the tools listed in the mapping are recorded; every other call is forwarded
 | key                | required | meaning                                                                                                    |
 | ------------------ | -------- | ---------------------------------------------------------------------------------------------------------- |
 | `contract_id`      | yes      | the contract that governs this action                                                                      |
-| `subject`          | yes      | path to the subject id (an order, a ticket). A call where it is missing is forwarded and **not** recorded   |
+| `subject`          | yes      | path to the subject id (an order, a ticket), or a `{path}` template such as `zendesk_ticket_{arguments.ticket_id}` (since 0.1.3). A call where it is missing is forwarded and **not** recorded |
 | `contract_version` | no       | pin a contract version                                                                                     |
 | `action_type`      | no       | e.g. `refund_order`                                                                                        |
 | `subject_kind`     | no       | e.g. `order`                                                                                               |

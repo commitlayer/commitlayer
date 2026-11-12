@@ -1,6 +1,6 @@
 [project]
 name = "commitlayer-mcp-recorder"
-version = "0.1.1"
+version = "0.1.2"
 description = "CommitLayer MCP Recorder: a stdio proxy that records an agent's MCP tool calls as CommitLayer actions"
 readme = "README.md"
 requires-python = ">=3.10"

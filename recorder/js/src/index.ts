@@ -31,7 +31,10 @@ export interface ToolRule {
   contract_id: string;
   contract_version?: number;
   action_type?: string;
-  /** Path to the subject id, e.g. `arguments.order_id`. Required; a call where it is missing is not recorded. */
+  /**
+   * Path to the subject id, e.g. `arguments.order_id`, or a template with `{path}` placeholders such as
+   * `zendesk_ticket_{arguments.ticket_id}`. Required; a call where it is missing is not recorded.
+   */
   subject: string;
   subject_kind?: string;
   /** Parameter name to path, e.g. `{ "amount": "arguments.amount" }`. Missing values are left out. */
@@ -249,11 +252,18 @@ function now(): string {
 export function buildAction(rule: ToolRule, callParams: unknown, opts: BuildActionOptions = {}): ActionBody {
   const call: Json = isObject(callParams) ? callParams : {};
   const tool = typeof call.name === "string" ? call.name : String(call.name ?? "");
-  const subject = resolvePath(call, rule.subject);
-  if (subject === undefined || subject === null) {
-    throw new PathError(`subject path "${rule.subject}" is missing from the call`);
+  // A template such as `zendesk_ticket_{arguments.ticket_id}` spells out a prefix the tool call does not carry;
+  // a plain path is resolved as is.
+  let subjectId: string;
+  if (rule.subject.includes("{")) {
+    subjectId = renderTemplate(rule.subject, call);
+  } else {
+    const subject = resolvePath(call, rule.subject);
+    if (subject === undefined || subject === null) {
+      throw new PathError(`subject path "${rule.subject}" is missing from the call`);
+    }
+    subjectId = scalar(subject, `subject path "${rule.subject}"`);
   }
-  const subjectId = scalar(subject, `subject path "${rule.subject}"`);
   const requestId = opts.requestId === undefined || opts.requestId === null ? crypto.randomUUID() : String(opts.requestId);
 
   const params: Json = {};
