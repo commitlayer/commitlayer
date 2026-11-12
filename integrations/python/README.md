@@ -11,6 +11,7 @@ CommitLayer for agent frameworks and durable-workflow runtimes. One distribution
 | [`commitlayer_pydantic_ai`](commitlayer_pydantic_ai/README.md) | Pydantic AI | `pip install 'commitlayer-integrations[pydantic-ai]'` |
 | [`commitlayer_temporal`](commitlayer_temporal/README.md) | Temporal (`temporalio`) | `pip install 'commitlayer-integrations[temporal]'` |
 | [`commitlayer_inngest`](commitlayer_inngest/README.md) | Inngest (`inngest`) | `pip install 'commitlayer-integrations[inngest]'` |
+| [`commitlayer_x402`](commitlayer_x402/README.md) | x402 payments on `httpx` (any client through two methods) | `pip install 'commitlayer-integrations[x402]'` |
 
 The four framework packages share one mapping and one recorder (`commitlayer_integrations.tools.ToolRecorder`):
 a tool name maps to a contract, the argument that holds the subject, and the arguments that are the action's

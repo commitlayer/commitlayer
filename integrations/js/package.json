@@ -1,7 +1,7 @@
 {
   "name": "@commitlayer/integrations",
-  "version": "0.1.2",
-  "description": "CommitLayer integrations for workflow engines: record Temporal activities and Inngest steps as actions before they run, and gate workflow completion on the verdict",
+  "version": "0.1.3",
+  "description": "CommitLayer integrations for workflow engines and x402: record Temporal activities and Inngest steps as actions before they run, gate workflow completion on the verdict, and record purchases made over x402",
   "license": "MIT",
   "type": "module",
   "main": "dist/index.js",
@@ -18,6 +18,10 @@
     "./inngest": {
       "types": "./dist/inngest.d.ts",
       "import": "./dist/inngest.js"
+    },
+    "./x402": {
+      "types": "./dist/x402.d.ts",
+      "import": "./dist/x402.js"
     }
   },
   "files": [

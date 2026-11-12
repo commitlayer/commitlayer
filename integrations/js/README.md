@@ -8,6 +8,7 @@ the package installs and works with either one present). Node 20+, ESM, TypeScri
 |---|---|
 | `@commitlayer/integrations/temporal` | An activity interceptor that records a mapped activity as a CommitLayer action **before** it runs, and a `commitlayerVerify` activity that waits for the verdict. |
 | `@commitlayer/integrations/inngest` | `recordedStep(step, "name", fn, {...})` and `waitForVerdict(step, actionRef, {...})` for Inngest functions. |
+| `@commitlayer/integrations/x402` | `x402Observer({ recorder, evidence?, kind, contractVersion, decimals })` and `observer.wrap(fetch)`: records a purchase made over x402 from the protocol's headers and pushes its settlement and delivery facts. See [x402](#x402). |
 
 Temporal makes the workflow durable. CommitLayer independently verifies the result.
 
@@ -235,6 +236,33 @@ API. The number of polls is derived from the timeout and the interval, not from 
 every replay. Pass `stepId` to change the prefix when one run waits on several actions. The returned verdict has
 the shape shown under Temporal above; `timedOut: true` means the wait gave up and the verdicts are provisional.
 Same completion gate: no "done" to the customer before PASS, FAIL compensates, a timeout is the function's decision.
+
+## x402
+
+Agents that pay for a service over [x402](https://github.com/coinbase/x402) exchange three headers: the quote
+(`PAYMENT-REQUIRED` on a 402), the payment (`PAYMENT-SIGNATURE` on the retry) and the settlement
+(`PAYMENT-RESPONSE` on the final response). The observer wraps the `fetch` the x402 client library pays with,
+records the purchase (`purchase_<kind>` on the subject `<nonce>`, with the quote's amount, asset, network, `payTo`,
+resource and provider) and pushes a `settlement` fact (settled, pending for the facilitator's `settlement_pending`,
+or failed) and a `delivered` or `delivery_failed` fact. It never pays, signs, retries, blocks, or keeps a body, a
+signature or a key.
+
+```ts
+import { Client } from "commitlayer";
+import { x402Observer } from "@commitlayer/integrations/x402";
+
+const recorder = new Client({ apiKey: process.env.COMMITLAYER_RECORDER_KEY });   // actions:record
+const observer = x402Observer({ recorder, kind: "api_call", contractVersion: 3, decimals: 6 });
+const paidFetch = observer.wrap(x402Fetch);    // the x402 client's fetch, which pays and retries
+const res = await paidFetch("https://api.example-data.com/v1/quote");
+console.log(observer.last?.actionId, observer.last?.settlement, observer.last?.delivered);
+```
+
+Inside the agent's own process the facts travel with the recorder key and the service classes them
+`agent_self_report`: shown, never counted as proof. In a gateway or tool server that terminates the 402 flow for
+the agent, pass `evidence: new Client({ apiKey: EVIDENCE_KEY })` (a `facts:write` key) and the same facts are
+`customer_backend`, which the x402 Service Delivery pack's contracts accept. `kind` is one of `api_call`,
+`browser_session`, `dataset`, `model_inference`, `compute_resource`, `mcp_tool_call`.
 
 ## Testing your wiring
 
