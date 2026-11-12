@@ -32,8 +32,8 @@ from collections.abc import Callable
 from datetime import datetime, timezone
 from typing import Any
 
-__all__ = ["Client", "CommitLayerError", "__version__"]
-__version__ = "0.1.0"
+__all__ = ["Client", "CommitLayerError", "Packs", "__version__"]
+__version__ = "0.1.2"  # kept equal to pyproject.toml; tests check it
 
 log = logging.getLogger("commitlayer")
 
@@ -241,6 +241,15 @@ class Client:
         last one."""
         return self._call("POST", "/v1/contracts", {"yaml": yaml_text})
 
+    # ---------------- workflow packs ----------------
+
+    @property
+    def packs(self) -> Packs:
+        """The workflow packs (``/v1/packs``): ``client.packs.list()``, ``get``, ``configure``, ``dry_run``,
+        ``install``. Install creates drafts and never activates; activation stays a person's
+        ``POST /v1/contracts/{id}/select``."""
+        return Packs(self)
+
     # ---------------- decorator ----------------
 
     def action(
@@ -304,3 +313,55 @@ class Client:
             return wrapper
 
         return deco
+
+
+class Packs:
+    """``/v1/packs``: the workflow pack library. Reads take any member; ``configure`` and ``dry_run`` write nothing
+    and take an analyst; ``install`` saves the configured contracts as **drafts** (never activates) and needs
+    ``confirm=True``. ``configuration`` is ``{workflow_id: {parameter_key: value}}``."""
+
+    def __init__(self, client: Client):
+        self._c = client
+
+    def list(self) -> dict[str, Any]:
+        """``GET /v1/packs``: ``{items: PackSummary[]}``."""
+        return self._c._call("GET", "/v1/packs")
+
+    def get(self, pack_id: str) -> dict[str, Any]:
+        """``GET /v1/packs/{id}``: the summary plus contracts, recorder mapping, fixtures, templates, readme,
+        versions and the workspace's requirements (plan, connectors, evidence)."""
+        return self._c._call("GET", f"/v1/packs/{pack_id}")
+
+    def configure(self, pack_id: str, configuration: dict[str, Any] | None = None) -> dict[str, Any]:
+        """``POST /v1/packs/{id}/configure``: the contracts with the configuration applied, the values in force and
+        every way a value weakens a check. Nothing is written."""
+        return self._c._call("POST", f"/v1/packs/{pack_id}/configure", {"configuration": configuration or {}})
+
+    def dry_run(
+        self, pack_id: str, configuration: dict[str, Any] | None = None, *, workflow: str | None = None
+    ) -> dict[str, Any]:
+        """``POST /v1/packs/{id}/dry-run``: every fixture case through the engine against the configured
+        contracts, in a savepoint; ``{summary: {total, ok}, cases: [...]}``. Nothing persists."""
+        body: dict[str, Any] = {"configuration": configuration or {}}
+        if workflow:
+            body["workflow"] = workflow
+        return self._c._call("POST", f"/v1/packs/{pack_id}/dry-run", body)
+
+    def install(
+        self, pack_id: str, configuration: dict[str, Any] | None = None, *, confirm: bool = False
+    ) -> dict[str, Any]:
+        """``POST /v1/packs/{id}/install``: save the configured contracts as drafts and record the installation.
+        Refused without ``confirm=True``; answers 402 ``plan_required`` below the pack's minimum plan. Returns
+        the drafts' versions, the recorder mapping with those versions pinned and the activation steps."""
+        return self._c._call(
+            "POST", f"/v1/packs/{pack_id}/install", {"configuration": configuration or {}, "confirm": confirm}
+        )
+
+    def coverage(self, pack_id: str) -> dict[str, Any]:
+        """``GET /v1/packs/{id}/coverage``: sources covered and their trust, unmapped consequential tools,
+        activation state per contract, identity links seen."""
+        return self._c._call("GET", f"/v1/packs/{pack_id}/coverage")
+
+    def recorder_mapping(self, pack_id: str) -> dict[str, Any]:
+        """``GET /v1/packs/{id}/recorder-mapping``: the installed mapping, contract versions pinned."""
+        return self._c._call("GET", f"/v1/packs/{pack_id}/recorder-mapping")

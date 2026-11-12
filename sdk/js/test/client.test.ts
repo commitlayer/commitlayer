@@ -1,4 +1,5 @@
 import { test } from "node:test";
+import { readFileSync } from "node:fs";
 import assert from "node:assert/strict";
 
 import { Client, CommitLayerError, VERSION, type Json, type Transport } from "../src/index.js";
@@ -26,7 +27,7 @@ function client(reply?: { status: number; json: unknown } | Error, agentId?: str
 }
 
 test("version", () => {
-  assert.equal(VERSION, "0.1.0");
+  assert.equal(VERSION, JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")).version);
 });
 
 test("constructor requires a key unless a transport is injected", () => {
@@ -333,4 +334,38 @@ test("waitForSettlement gives up at its own deadline and returns the pending vie
   assert.equal(v.timed_out, true);
   assert.equal(calls.length, 1);
   assert.equal(calls[0].path, "/v1/actions/refund:o1/wait?timeout=0");
+});
+
+test("packs: the helpers call the pack routes and never activate", async () => {
+  const calls: Array<[string, string, Json | null | undefined]> = [];
+  const transport: Transport = async (method, path, body) => {
+    calls.push([method, path, body]);
+    return { status: 200, json: { ok: true } };
+  };
+  const c = new Client({ transport });
+  await c.packs.list();
+  await c.packs.get("x402_service_delivery");
+  await c.packs.configure("x402_service_delivery", { purchase_api_call: { approved_limit: 2 } });
+  await c.packs.dryRun("x402_service_delivery", {}, { workflow: "purchase_api_call" });
+  await c.packs.install("x402_service_delivery", {}, { confirm: true });
+  await c.packs.install("x402_service_delivery");
+  await c.packs.coverage("x402_service_delivery");
+  await c.packs.recorderMapping("x402_service_delivery");
+  assert.deepEqual(
+    calls.map(([m, p]) => [m, p]),
+    [
+      ["GET", "/v1/packs"],
+      ["GET", "/v1/packs/x402_service_delivery"],
+      ["POST", "/v1/packs/x402_service_delivery/configure"],
+      ["POST", "/v1/packs/x402_service_delivery/dry-run"],
+      ["POST", "/v1/packs/x402_service_delivery/install"],
+      ["POST", "/v1/packs/x402_service_delivery/install"],
+      ["GET", "/v1/packs/x402_service_delivery/coverage"],
+      ["GET", "/v1/packs/x402_service_delivery/recorder-mapping"],
+    ],
+  );
+  assert.deepEqual(calls[2][2], { configuration: { purchase_api_call: { approved_limit: 2 } } });
+  assert.deepEqual(calls[3][2], { configuration: {}, workflow: "purchase_api_call" });
+  assert.deepEqual(calls[4][2], { configuration: {}, confirm: true });
+  assert.deepEqual(calls[5][2], { configuration: {}, confirm: false });
 });

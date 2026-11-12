@@ -113,6 +113,21 @@ if (v.timed_out) {
 
 The API holds each call for up to 60 seconds; the SDK loops. The gate reads evidence; it never changes a verdict.
 
+## Install a workflow pack (drafts, never activation)
+
+```ts
+const { items } = await cl.packs.list();
+const detail = await cl.packs.get("x402_service_delivery");
+const effective = await cl.packs.configure("x402_service_delivery", { purchase_api_call: { approved_limit: 2 } });
+const report = await cl.packs.dryRun("x402_service_delivery", { purchase_api_call: { approved_limit: 2 } });
+const out = await cl.packs.install("x402_service_delivery", { purchase_api_call: { approved_limit: 2 } }, { confirm: true });
+console.log(out.activation);                        // the person's step: POST /v1/contracts/{id}/select
+const mapping = await cl.packs.recorderMapping("x402_service_delivery");
+```
+
+`configure` and `dryRun` write nothing; `install` saves the configured contracts as **drafts** and never
+activates. Below the pack's minimum plan the service answers `402 plan_required` with `upgrade_to`.
+
 ## Errors
 
 Every method throws a `CommitLayerError` for a 4xx or 5xx response, with `status`, `code`, `message` and

@@ -100,6 +100,23 @@ else:
 
 The API holds each call for up to 60 seconds; the SDK loops. The gate reads evidence; it never changes a verdict.
 
+## Install a workflow pack (drafts, never activation)
+
+```python
+packs = cl.packs.list()["items"]                                   # Stripe Customer Operations, x402, Coinbase
+detail = cl.packs.get("stripe_customer_operations")                # contracts, requirements, templates, versions
+effective = cl.packs.configure("stripe_customer_operations", {"refund_order": {"approved_limit": 100}})
+report = cl.packs.dry_run("stripe_customer_operations", {"refund_order": {"approved_limit": 100}})
+assert report["summary"]["ok"] == report["summary"]["total"]      # every fixture case holds under your limits
+out = cl.packs.install("stripe_customer_operations", {"refund_order": {"approved_limit": 100}}, confirm=True)
+print(out["activation"]["how"])                                    # POST /v1/contracts/<id>/select, by a person
+mapping = cl.packs.recorder_mapping("stripe_customer_operations") # contract versions pinned
+```
+
+`configure` and `dry_run` write nothing. `install` saves the configured contracts as **drafts**: nothing governs a
+live action until a person activates a version in the app or with `POST /v1/contracts/{id}/select`. Below the
+pack's minimum plan the service answers `402 plan_required` with `upgrade_to`.
+
 ## Correct a failed action
 
 ```python

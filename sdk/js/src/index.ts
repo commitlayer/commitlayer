@@ -20,7 +20,7 @@
  * Verification itself is done by the API from the systems of record; nothing here consults the function's result.
  */
 
-export const VERSION = "0.1.0";
+export const VERSION = "0.1.3"; // kept equal to package.json; the tests check it
 
 export type Json = Record<string, unknown>;
 
@@ -294,6 +294,17 @@ export class Client {
     return this.call("POST", "/v1/contracts", { yaml });
   }
 
+  // ---------------- workflow packs ----------------
+
+  /**
+   * The workflow packs (`/v1/packs`): `client.packs.list()`, `get`, `configure`, `dryRun`, `install`, `coverage`,
+   * `recorderMapping`. Install creates drafts and never activates; activation stays a person's
+   * `POST /v1/contracts/{id}/select`.
+   */
+  get packs(): Packs {
+    return new Packs(this);
+  }
+
   // ---------------- wrapper ----------------
 
   /**
@@ -338,5 +349,59 @@ export class Client {
       wrapped.lastRecorded = null;
       return wrapped;
     };
+  }
+}
+
+/** `{workflow_id: {parameter_key: value}}`, as the pack's manifest names them. */
+export type PackConfiguration = Record<string, Record<string, unknown>>;
+
+/**
+ * `/v1/packs`: the workflow pack library. Reads take any member; `configure` and `dryRun` write nothing and take an
+ * analyst; `install` saves the configured contracts as **drafts** (never activates) and needs `confirm: true`.
+ */
+export class Packs {
+  constructor(private readonly client: Client) {}
+
+  /** `GET /v1/packs`: `{items: PackSummary[]}`. */
+  list(): Promise<Json> {
+    return this.client.request("GET", "/v1/packs");
+  }
+
+  /** `GET /v1/packs/{id}`: the summary plus contracts, recorder mapping, fixtures, templates, readme, versions and requirements. */
+  get(packId: string): Promise<Json> {
+    return this.client.request("GET", `/v1/packs/${encodeURIComponent(packId)}`);
+  }
+
+  /** `POST /v1/packs/{id}/configure`: the configured contracts, the values in force and every weakening. Nothing is written. */
+  configure(packId: string, configuration: PackConfiguration = {}): Promise<Json> {
+    return this.client.request("POST", `/v1/packs/${encodeURIComponent(packId)}/configure`, { configuration });
+  }
+
+  /** `POST /v1/packs/{id}/dry-run`: every fixture case through the engine, in a savepoint; nothing persists. */
+  dryRun(packId: string, configuration: PackConfiguration = {}, opts: { workflow?: string } = {}): Promise<Json> {
+    const body: Json = { configuration };
+    if (opts.workflow) body.workflow = opts.workflow;
+    return this.client.request("POST", `/v1/packs/${encodeURIComponent(packId)}/dry-run`, body);
+  }
+
+  /**
+   * `POST /v1/packs/{id}/install`: save the configured contracts as drafts and record the installation. Refused
+   * without `confirm: true`; 402 `plan_required` below the pack's minimum plan.
+   */
+  install(packId: string, configuration: PackConfiguration = {}, opts: { confirm?: boolean } = {}): Promise<Json> {
+    return this.client.request("POST", `/v1/packs/${encodeURIComponent(packId)}/install`, {
+      configuration,
+      confirm: opts.confirm ?? false,
+    });
+  }
+
+  /** `GET /v1/packs/{id}/coverage`. */
+  coverage(packId: string): Promise<Json> {
+    return this.client.request("GET", `/v1/packs/${encodeURIComponent(packId)}/coverage`);
+  }
+
+  /** `GET /v1/packs/{id}/recorder-mapping`: the installed mapping, contract versions pinned. */
+  recorderMapping(packId: string): Promise<Json> {
+    return this.client.request("GET", `/v1/packs/${encodeURIComponent(packId)}/recorder-mapping`);
   }
 }
