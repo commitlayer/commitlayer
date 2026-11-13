@@ -147,6 +147,19 @@ stays pending until the window closes and every source has caught up.
 - **Fail-open (default).** If the API returns 4xx/5xx, times out (`--timeout`, default 5 seconds) or cannot be
   reached, the call is forwarded anyway and a warning goes to stderr. The gap shows up as an action that was
   never recorded rather than one that never happened.
+- **A busy API is retried, inside the same time.** When the API refuses the record with `429` or `503` **and** a
+  `Retry-After` header (`workspace_busy`, `busy`, `rate_limited`), the recorder waits the stated time and sends
+  the same body again, so the same `action_id` and `requested_at`: `--retries` times at most (default 2;
+  `--retries 0` turns it off). The wait is never shorter than stated and grows by a random addition of up to
+  twice as much, or of what the record's time still allows when that is less, so recorders refused together come
+  back spread out. `--timeout` covers the whole record, every attempt and every wait, so a retry never adds to
+  how long a tool call can be held: the worst case is `--timeout`, with or without retries. A wait is made only
+  when a second of `--timeout` would be left for the attempt after it: an attempt with less would time out in
+  the recorder while the API may still store the action. With `--timeout` of two seconds or less there is never
+  that room for the one second the API states, and the record is sent once. Nothing else is retried: no other
+  status, no `429` or `503` without `Retry-After`, no network error, no timeout. Each retry writes one line to
+  stderr, `recording <action_id> (<tool>) answered HTTP 429 workspace_busy: ...: retry 1 of 2 in 1842 ms`; when
+  the retries are used up the last answer is the failure and the two rules around this one apply.
 - **`--no-fail-open`.** The call is not forwarded; the client receives a JSON-RPC error for that request id,
   `code -32000`, message `CommitLayer recording failed: …`. Later traffic flows normally.
 - **No `COMMITLAYER_API_KEY`.** The recorder warns once at start and runs as a pure passthrough.
@@ -166,7 +179,8 @@ commitlayer-mcp-recorder --map mapping.json [options] -- <downstream command> [a
   --agent-id <id>       overrides agent_id from the mapping file
   --workflow-id <id>    overrides workflow_id from the mapping file
   --api-url <url>       default $COMMITLAYER_API_URL or https://api.commitlayer.ai
-  --timeout <seconds>   per-record timeout (default 5)
+  --timeout <seconds>   time allowed for one record, retries included (default 5)
+  --retries <n>         times a record refused with 429 or 503 and Retry-After is sent again (default 2; 0 is off)
   --no-fail-open        answer the client with a JSON-RPC error instead of forwarding when recording fails
   --warn-unmapped       log once per tool name that is called but not mapped
   --version, --help
@@ -191,7 +205,8 @@ rec.observe(responseLine); // logs "recorded <action_id> → tool result isError
 const code = await run({ mapping, command: "npx", args: ["-y", "@stripe/mcp"], apiKey: process.env.COMMITLAYER_API_KEY });
 ```
 
-`fetch`, `now` and `log` are injectable for tests.
+`fetch`, `now` and `log` are injectable for tests, and so are `sleep` and `random`, the wait before a retry and
+the random source of its addition. `maxRetries` is the library's `--retries`, `timeoutMs` its `--timeout`.
 
 ## Limits
 

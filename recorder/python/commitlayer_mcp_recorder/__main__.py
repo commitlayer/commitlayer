@@ -1,7 +1,7 @@
 """``commitlayer-mcp-recorder``: the stdio proxy.
 
     commitlayer-mcp-recorder --map mapping.json [--agent-id ID] [--workflow-id ID] [--api-url URL]
-        [--timeout 5] [--no-fail-open] [--warn-unmapped] -- <downstream command and args>
+        [--timeout 5] [--retries 2] [--no-fail-open] [--warn-unmapped] -- <downstream command and args>
 
 Client stdin is pumped line by line to the downstream server's stdin and the server's stdout back to the
 client's stdout, in order and unchanged. The server's stderr is relayed to our stderr. The proxy exits when
@@ -54,7 +54,18 @@ def build_parser() -> argparse.ArgumentParser:
         default=os.environ.get("COMMITLAYER_API_URL") or DEFAULT_API_URL,
         help=f"CommitLayer API base URL; default $COMMITLAYER_API_URL or {DEFAULT_API_URL}",
     )
-    parser.add_argument("--timeout", type=float, default=5.0, help="seconds to wait for the API (default 5)")
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=5.0,
+        help="seconds allowed for one record, retries included (default 5)",
+    )
+    parser.add_argument(
+        "--retries",
+        type=int,
+        default=2,
+        help="times a record refused with 429 or 503 and Retry-After is sent again (default 2; 0 is off)",
+    )
     parser.add_argument(
         "--no-fail-open",
         action="store_true",
@@ -172,6 +183,8 @@ def main(argv: list[str] | None = None) -> int:
         options, command = args_in, []
     parser = build_parser()
     args = parser.parse_args(options)
+    if args.retries < 0:
+        parser.error("--retries must be a whole number, 0 or more")
     if not command:
         parser.error("the downstream server command is required after '--'")
     if not args.map:
@@ -191,6 +204,7 @@ def main(argv: list[str] | None = None) -> int:
         agent_id=args.agent_id,
         workflow_id=args.workflow_id,
         timeout=args.timeout,
+        max_retries=args.retries,
         fail_open=not args.no_fail_open,
         warn_unmapped=args.warn_unmapped,
     )

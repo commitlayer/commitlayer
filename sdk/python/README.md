@@ -117,6 +117,62 @@ mapping = cl.packs.recorder_mapping("stripe_customer_operations") # contract ver
 live action until a person activates a version in the app or with `POST /v1/contracts/{id}/select`. Below the
 pack's minimum plan the service answers `402 plan_required` with `upgrade_to`.
 
+## What is retried
+
+When the API cannot admit a request it answers `503 busy` (the service is at its limit) or `429` (`workspace_busy`:
+this workspace already has its share of writes in progress; `rate_limited`: its requests a minute are spent) with a
+`Retry-After` header. The client waits the time the header states and sends the same request again, so a burst
+that the API spreads over a few seconds never reaches your code as an error. Since 0.1.3.
+
+| | |
+|---|---|
+| Retried | An answer of **429 or 503 that carries `Retry-After`**, as seconds (`1`, `1.5`) or an HTTP-date, for any method of the client. |
+| Not retried | Every other status (400, 402, 404, 409, 500 and the rest), a 429 or 503 **without** the header (the API's limit on requests in flight answers a plain `503` like that), a timeout and a network error: after those the client cannot know whether the request arrived. |
+| How often | `max_retries=3` times after the first attempt. `max_retries=0` turns retrying off. |
+| How long | Never less than the header states, plus a random addition of up to twice as much, so the calls of a burst that were refused together come back spread out, and never more than `max_retry_wait`. A stated wait above `max_retry_wait=10.0` seconds is not waited at all: the error is raised at once (the Developer plan's daily cap, `429 fair_use_exceeded`, states the seconds to midnight). |
+| Worst case | One call waits at most `max_retries * max_retry_wait` seconds, 30 by default, on top of its requests. The API states one second today, so each retry waits between one and three seconds: a call refused once adds one to three seconds, a call that uses all three retries adds three to nine. |
+| The request | Identical on every attempt, byte for byte. `record_action` chooses the `action_id` before the first attempt, so every attempt names the same action and the API records it once. |
+
+```python
+from commitlayer import Client, CommitLayerError
+
+cl = Client(max_retries=3, max_retry_wait=10.0)   # the defaults
+single = Client(max_retries=0)                    # never retry: the first refusal is raised
+
+try:
+    cl.record_action("refund_workflow", "order_10231", action_id="refund:order_10231")
+except CommitLayerError as e:
+    e.status, e.code            # 429, "workspace_busy": the last answer, as before
+    e.retry_after               # seconds the last answer asked to wait, or None when it stated none
+    e.attempts                  # how many times the request was sent (4 once three retries are used up)
+```
+
+One request is the exception. `POST /v1/actions` is idempotent on `action_id`, and the API may answer `503 busy`
+after the action itself is stored, so a recording that names no `action_id` is sent once and never repeated.
+`record_action` and the `@cl.action` decorator always name one; this only concerns a body you build yourself for
+`cl.request("POST", "/v1/actions", ...)` or an inline `cl.verify(action=...)` that is stored.
+
+For the same reason a `503` that `record_action` still raises, after its retries or without any, does not prove
+the action is absent: the API may have stored it and failed only to verify it in time. Recording it again with the
+same `action_id` is safe, and `cl.get_action(action_id)` says whether it is there.
+
+Every attempt is a request to the API, and today a write the API refuses as `workspace_busy` or `busy` has already
+been counted against the plan's write requests a minute (60 on the Developer plan). A large burst that is mostly
+refused and retried can therefore spend that minute's budget and end in `429 rate_limited`. Retries make a burst
+succeed, not go faster: a caller that sends its writes a few at a time is seldom refused in the first place.
+
+The wait blocks the calling thread (`time.sleep`), the decorator included, and a retried poll can add up to the
+same bound to `wait_for_settlement(timeout=...)`. In an event loop, call the client from a worker thread
+(`await asyncio.to_thread(cl.record_action, ...)`) or pass `max_retries=0` and schedule the retry yourself from
+`e.retry_after`. Each retry writes one line at INFO level to the `commitlayer` logger: method, path, status, code and
+the wait, never the key or the body.
+
+A custom `transport` is a function `(method, path, body)` that returns `(status, payload)` or
+`(status, payload, headers)`. Only the second form can be retried: without response headers there is no stated
+wait, so the first refusal is raised as it always was. `headers` is a dict or another mapping, the headers object
+of `urllib` and `http.client` (`response.headers`), or a list of `(name, value)` pairs; the name is matched in any
+case, and a header that is there twice counts at the longer wait.
+
 ## Correct a failed action
 
 ```python

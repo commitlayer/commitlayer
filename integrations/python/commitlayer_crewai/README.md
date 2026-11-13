@@ -23,4 +23,8 @@ hook context's `tool_name` and `tool_input` and returns `None`, so no call is ev
 `agents=[...]` narrow the hook the way CrewAI's own decorator does; `uninstall(recorder)` removes it. The
 tool's result is never sent to CommitLayer.
 
+When the API answers `429` or `503` with `Retry-After` the client waits the stated time and sends the same call
+again before the tool runs (see [When the API is busy](../README.md#when-the-api-is-busy)). The hook is
+synchronous and the wait blocks the thread that runs it; `Client(max_retries=0)` turns the retries off.
+
 The mapping format is documented in `commitlayer_integrations.tools`.

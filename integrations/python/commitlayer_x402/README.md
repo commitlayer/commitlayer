@@ -69,5 +69,10 @@ proceeds; `fail_open=False` raises instead). It never stores a body, a `PAYMENT-
 `Authorization` header, a wallet key, a seed phrase or a facilitator credential. Its only state is the last quote per
 URL, in memory.
 
+The paid request leaves after the action is recorded, and the client waits and sends the recording again when
+the API answers `429` or `503` with `Retry-After` (see [When the API is busy](../README.md#when-the-api-is-busy)).
+A signed payment is valid for a limited time (`maxTimeoutSeconds`), so give the observer a client whose bound is
+well inside it, for example `Client(max_retries=1, max_retry_wait=2.0)`, or `max_retries=0` to never wait.
+
 The agent may declare its intent. It may read the verdict. It must never control the independent facts, the
 governing contract, or the final evidence.

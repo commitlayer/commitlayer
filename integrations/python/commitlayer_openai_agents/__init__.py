@@ -65,7 +65,8 @@ class CommitLayerHooks(_Base):  # type: ignore[misc]
         if not name or not hasattr(context, "tool_arguments"):
             return  # a hosted tool with no arguments to map
         call_id = getattr(context, "tool_call_id", None)
-        self.recorder.record(str(name), _arguments(context), call_id=call_id)
+        # Off the event loop: the request blocks, and so does the wait when the API asks for a retry.
+        await self.recorder.record_async(str(name), _arguments(context), call_id=call_id)
 
     async def on_tool_end(self, context: Any, agent: Any, tool: Any, result: Any) -> None:
         return None  # the tool's own result is never evidence

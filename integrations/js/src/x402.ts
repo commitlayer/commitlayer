@@ -18,7 +18,7 @@
 
 import type { Json } from "commitlayer";
 
-export const X402_VERSION = "0.1.3";
+export const X402_VERSION = "0.1.4";
 
 export const KINDS = ["api_call", "browser_session", "dataset", "model_inference", "compute_resource", "mcp_tool_call"] as const;
 export type Kind = (typeof KINDS)[number];

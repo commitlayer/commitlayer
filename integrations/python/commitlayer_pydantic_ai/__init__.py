@@ -53,5 +53,6 @@ class RecordingToolset(_Base):  # type: ignore[misc]
     async def call_tool(self, name: str, tool_args: dict[str, Any], ctx: Any, tool: Any) -> Any:
         call_id = getattr(ctx, "tool_call_id", None)
         run_id = getattr(ctx, "run_id", None)
-        self.recorder.record(name, dict(tool_args or {}), call_id=call_id, run_id=run_id)
+        # Off the event loop: the request blocks, and so does the wait when the API asks for a retry.
+        await self.recorder.record_async(name, dict(tool_args or {}), call_id=call_id, run_id=run_id)
         return await super().call_tool(name, tool_args, ctx, tool)

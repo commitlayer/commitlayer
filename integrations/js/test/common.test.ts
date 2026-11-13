@@ -1,4 +1,5 @@
 import { test } from "node:test";
+import { readFileSync } from "node:fs";
 import assert from "node:assert/strict";
 
 import {
@@ -6,13 +7,25 @@ import {
   pollUntilSettled,
   renderTemplate,
   resolveClient,
+  sdkClientOptions,
+  INLINE_RETRY,
+  NO_RETRY,
   resolvePath,
   scalar,
   sendAction,
   summarizeVerification,
+  VERSION,
   type ActionBody,
 } from "../src/index.js";
+import { X402_VERSION } from "../src/x402.js";
 import { fakeApi, pendingVerification, settledVerification } from "./helpers.js";
+
+test("the version constants are the package's version", () => {
+  // Compiled to dist-test/test/, so package.json is two levels up.
+  const pkg = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")) as { version: string };
+  assert.equal(VERSION, pkg.version);
+  assert.equal(X402_VERSION, pkg.version);
+});
 
 test("resolvePath walks objects and arrays and returns undefined for a missing segment", () => {
   const root = { args: [{ orderId: "order_1", amount: 180 }], info: { attempt: 2 } };
@@ -105,6 +118,26 @@ test("resolveClient returns the given client and otherwise needs a key", () => {
   }
   const c = resolveClient({ apiKey: "spk_test", apiUrl: "https://example.test/" });
   assert.equal(c instanceof Object, true);
+});
+
+test("sdkClientOptions: the caller's retry options, then the integration's, else none so the SDK's defaults apply", () => {
+  const base = { apiKey: "spk_test", apiUrl: "https://example.test", timeoutMs: 5000 };
+  assert.deepEqual(INLINE_RETRY, { maxRetries: 2, maxRetryWaitMs: 2000 });
+  assert.deepEqual(NO_RETRY, { maxRetries: 0 });
+  assert.deepEqual(sdkClientOptions(base), base);
+  assert.deepEqual(sdkClientOptions(base, INLINE_RETRY), { ...base, maxRetries: 2, maxRetryWaitMs: 2000 });
+  assert.deepEqual(sdkClientOptions(base, NO_RETRY), { ...base, maxRetries: 0 });
+  // What the caller sets wins, field by field; 0 from the caller turns a record's retries off.
+  assert.deepEqual(sdkClientOptions({ ...base, maxRetries: 0 }, INLINE_RETRY), { ...base, maxRetries: 0, maxRetryWaitMs: 2000 });
+  assert.deepEqual(sdkClientOptions({ ...base, maxRetries: 5, maxRetryWaitMs: 500 }, NO_RETRY), { ...base, maxRetries: 5, maxRetryWaitMs: 500 });
+  assert.deepEqual(sdkClientOptions({ ...base, maxRetryWaitMs: 750 }), { ...base, maxRetryWaitMs: 750 });
+  assert.deepEqual(sdkClientOptions({ ...base, maxRetryWaitMs: 500 }, INLINE_RETRY), { ...base, maxRetries: 2, maxRetryWaitMs: 500 });
+  assert.deepEqual(sdkClientOptions({ ...base, maxRetries: 4 }, INLINE_RETRY), { ...base, maxRetries: 4, maxRetryWaitMs: 2000 });
+  assert.deepEqual(sdkClientOptions({ ...base, maxRetries: 1 }, NO_RETRY), { ...base, maxRetries: 1 });
+  // The two sets of figures are shared by every client an integration builds: nothing can change them.
+  assert.ok(Object.isFrozen(INLINE_RETRY) && Object.isFrozen(NO_RETRY));
+  // The client itself is never part of what the SDK is given.
+  assert.ok(!("client" in sdkClientOptions({ client: fakeApi().client, apiKey: "spk_test" }, INLINE_RETRY)));
 });
 
 test("pollUntilSettled returns on the first settled poll and sleeps between polls", async () => {

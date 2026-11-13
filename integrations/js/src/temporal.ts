@@ -43,6 +43,8 @@ import {
   sendAction,
   DEFAULT_INTERVAL_MS,
   DEFAULT_TIMEOUT_MS,
+  INLINE_RETRY,
+  NO_RETRY,
 } from "./common.js";
 
 export const CHANNEL = "temporal";
@@ -300,12 +302,18 @@ export async function recordActivity(
  *
  * The client is built on first use from the options or `COMMITLAYER_API_KEY`. For the deprecated
  * `interceptors.activityInbound` list use `(ctx) => commitlayerActivityInterceptors(opts)(ctx).inbound`.
+ *
+ * A record the API refuses with 429 or 503 and `Retry-After` is sent again by the SDK, twice at most and after
+ * at most two seconds each (`maxRetries`, `maxRetryWaitMs`). Temporal's own retry policy cannot do this: with
+ * `failOpen` the failure is swallowed and the activity runs unrecorded, without it the failure is non-retryable.
+ * The interceptor runs inside the activity, in the worker's ordinary Node environment and not in the workflow
+ * sandbox, so the wait is an ordinary timer; it counts against the activity's timeouts.
  */
 export function commitlayerActivityInterceptors(
   options: TemporalRecorderOptions,
 ): (ctx?: ActivityContextLike) => ActivityInterceptorsLike {
   let client: ActionClient | undefined;
-  const getClient = () => (client ??= resolveClient(options));
+  const getClient = () => (client ??= resolveClient(options, INLINE_RETRY));
   return (ctx?: ActivityContextLike) => ({
     inbound: {
       async execute(input, next) {
@@ -353,7 +361,9 @@ export interface CommitLayerActivities {
 /** The activities to register on the worker, bound to a client. */
 export function createCommitLayerActivities(options: VerifyActivityOptions = {}): CommitLayerActivities {
   let client: ActionClient | undefined;
-  const getClient = () => (client ??= resolveClient(options));
+  // No SDK retry here: a wait inside the SDK would sit between two heartbeats, and a failed poll fails the
+  // activity, which Temporal retries under the activity's own retry policy.
+  const getClient = () => (client ??= resolveClient(options, NO_RETRY));
   return {
     async commitlayerVerify(actionRef: string, opts: VerifyOptions = {}): Promise<Verdict> {
       const ctx = options.context ? options.context() : await currentContext();

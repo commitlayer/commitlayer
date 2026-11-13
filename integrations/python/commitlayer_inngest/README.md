@@ -124,6 +124,14 @@ logger and `fn` runs anyway; the gap shows on the CommitLayer side as an action 
 `fail_open=False` the failure raises inside the step before `fn` runs, so Inngest retries the step and `fn`
 has not executed. Nothing in the log line carries the API key.
 
+A busy API is not a recording failure yet. When it answers `429` or `503` with `Retry-After` the client waits
+the stated time and sends the same body again, three times at most (see
+[When the API is busy](../README.md#when-the-api-is-busy)); the fail-open policy applies to the last answer.
+The wait happens inside the step, before `fn`: in the calling thread for a sync function and in the event loop's
+executor for an async one, so an async function's loop is never blocked. With the defaults a step waits at most
+30 seconds this way, and nine while the API states one second; `Client(max_retries=0)` leaves a busy answer
+to the step's own retry policy instead.
+
 ## 2. Gate completion on the verdict
 
 Recording does not verify, and a verification stays `pending` until its settlement window closes and every

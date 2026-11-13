@@ -12,7 +12,7 @@ export COMMITLAYER_API_KEY=spk_...     # a recorder key: records actions, reads 
 ```python
 from commitlayer import Client
 from commitlayer_integrations.tools import ToolRecorder
-from commitlayer_langgraph import record_tool_calls
+from commitlayer_langgraph import record_tool_calls, record_tool_calls_async
 from langgraph.prebuilt import ToolNode
 
 MAPPING = {
@@ -27,7 +27,11 @@ MAPPING = {
 }
 recorder = ToolRecorder(Client(agent_id="support-bot"), MAPPING)
 
-tools = ToolNode([refund_payment, close_ticket], wrap_tool_call=record_tool_calls(recorder))
+tools = ToolNode(
+    [refund_payment, close_ticket],
+    wrap_tool_call=record_tool_calls(recorder),         # the graph run with invoke or stream
+    awrap_tool_call=record_tool_calls_async(recorder),  # the graph run with ainvoke or astream
+)
 ```
 
 With LangChain v1 agents the same function is middleware:
@@ -41,9 +45,20 @@ agent = create_agent(
 )
 ```
 
+An agent that is invoked with `ainvoke` or `astream` takes the async function instead:
+`middleware=[wrap_tool_call(record_tool_calls_async(recorder))]`.
+
 The wrapper reads the tool's name, arguments and call id from the `ToolCallRequest`, posts the mapped ones to
 `POST /v1/actions`, and hands the request to the framework's handler unchanged. The tool's result is never
 sent. Recording is fail-open: if the API cannot be reached the tool still runs and a warning is logged.
+
+When the API answers `429` or `503` with `Retry-After` the client waits the stated time and sends the same call
+again before the tool runs (see [When the API is busy](../README.md#when-the-api-is-busy)). The request and that
+wait block the thread that runs them. `record_tool_calls` is a synchronous function, and a graph run with
+`ainvoke` or `astream` calls it on the event loop itself, where a wait stops every other task. That is what
+`record_tool_calls_async` (since 0.1.3) is for: `ToolNode` uses it in an async run, and it records in a worker
+thread, so the loop stays free and the tool still starts only once the call is recorded.
+`Client(max_retries=0)` turns the retries off.
 
 ## Gate the graph on the verdict
 

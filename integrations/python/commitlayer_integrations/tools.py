@@ -32,6 +32,7 @@ paths; without one the id is ``{channel}:{tool}:{call_id}`` so a retried call up
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import uuid
@@ -168,6 +169,10 @@ class ToolRecorder:
     logged and the tool call goes ahead; with ``fail_open=False`` the exception reaches the caller, which
     frameworks turn into a tool error. ``on_recorded`` receives the API's answer (``{action, verification,
     allowance}``) for every recorded call.
+
+    The client sends a recording again when the API answers 429 or 503 with ``Retry-After`` (see the SDK's
+    README), and it waits with a blocking sleep. :meth:`record` therefore belongs in synchronous hooks;
+    :meth:`record_async` is the same call for a hook that runs on an event loop.
     """
 
     def __init__(
@@ -210,30 +215,71 @@ class ToolRecorder:
         run_id: str | None = None,
     ) -> dict[str, Any] | None:
         """Record one tool call if its name is mapped. Returns the API's answer, or ``None`` when the tool is
-        unmapped or (fail-open) recording failed."""
-        m = self.mapping_for(tool)
+        unmapped or (fail-open) recording failed. Blocks for the request and for any wait before a retry."""
+        m = self._mapped(tool)
         if m is None:
-            if self.warn_unmapped and tool not in self._warned:
-                self._warned.add(tool)
-                log.warning("commitlayer: tool %r is not mapped; not recorded", tool)
             return None
         try:
-            body = build_tool_action(
-                m,
-                tool=tool,
-                arguments=arguments,
-                call_id=call_id,
-                run_id=run_id,
-                channel=self.channel,
-                agent_id=self.agent_id,
-                workflow_id=self.workflow_id,
-            )
-            out = self.client.request("POST", "/v1/actions", body)
+            out = self._post(m, tool, arguments, call_id, run_id)
         except Exception as e:  # noqa: BLE001 - the business action must not depend on the verifier
             if not self.fail_open:
                 raise
             log.warning("commitlayer: tool call %r not recorded: %s", tool, e)
             return None
+        return self._keep(out)
+
+    async def record_async(
+        self,
+        tool: str,
+        arguments: Mapping[str, Any] | None,
+        *,
+        call_id: str | None = None,
+        run_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        """:meth:`record` for a hook that runs on an event loop. The request, and the wait the API may ask for
+        before a retry, happen in a worker thread, so the loop keeps serving its other tasks; the call is
+        still recorded before this returns. ``on_recorded`` runs on the loop's thread, as with :meth:`record`."""
+        m = self._mapped(tool)
+        if m is None:
+            return None
+        try:
+            out = await asyncio.to_thread(self._post, m, tool, arguments, call_id, run_id)
+        except Exception as e:  # noqa: BLE001 - the business action must not depend on the verifier
+            if not self.fail_open:
+                raise
+            log.warning("commitlayer: tool call %r not recorded: %s", tool, e)
+            return None
+        return self._keep(out)
+
+    def _mapped(self, tool: str) -> ToolMapping | None:
+        m = self.mapping_for(tool)
+        if m is None and self.warn_unmapped and tool not in self._warned:
+            self._warned.add(tool)
+            log.warning("commitlayer: tool %r is not mapped; not recorded", tool)
+        return m
+
+    def _post(
+        self,
+        m: ToolMapping,
+        tool: str,
+        arguments: Mapping[str, Any] | None,
+        call_id: str | None,
+        run_id: str | None,
+    ) -> dict[str, Any]:
+        # The body is built once, so a retry inside the client repeats the same action_id and request time.
+        body = build_tool_action(
+            m,
+            tool=tool,
+            arguments=arguments,
+            call_id=call_id,
+            run_id=run_id,
+            channel=self.channel,
+            agent_id=self.agent_id,
+            workflow_id=self.workflow_id,
+        )
+        return self.client.request("POST", "/v1/actions", body)
+
+    def _keep(self, out: dict[str, Any]) -> dict[str, Any]:
         self.recorded.append(out)
         if self.on_recorded:
             self.on_recorded(out)

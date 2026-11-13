@@ -11,6 +11,13 @@ The downstream result is never treated as proof: CommitLayer verifies from the s
 is fail-open by default: if the API cannot be reached the call is forwarded anyway and a warning goes to
 stderr. The recorder never blocks, reorders or alters the agent's traffic.
 
+When the API refuses the action with 429 or 503 and a ``Retry-After`` header (it is busy) the recorder waits
+the stated time and posts the same action again before the fail-open policy applies; the API records an action
+once per ``action_id``, so the repeat is safe. The tool call waits meanwhile, so the retries (``--retries``, two
+by default) and their waits happen inside the time one record is allowed anyway (``--timeout``): a busy API
+never holds a call longer than an unreachable one did, and no wait is started unless a second of that time
+would be left for the attempt after it.
+
 Standard library only. ``load_mapping`` reads the mapping file, ``build_action`` turns one ``tools/call`` into
 an action body and ``Recorder`` holds the policy (key, URL, fail-open) and the request ids still waiting for
 a downstream answer.
@@ -19,6 +26,8 @@ a downstream answer.
 from __future__ import annotations
 
 import json
+import math
+import random
 import re
 import sys
 import threading
@@ -27,6 +36,8 @@ import urllib.error
 import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any
 
@@ -48,16 +59,24 @@ __all__ = [
     "post_action",
     "resolve_path",
 ]
-__version__ = "0.1.2"
+__version__ = "0.1.3"
 
 DEFAULT_API_URL = "https://api.commitlayer.ai"
 LOG_PREFIX = "commitlayer-recorder: "
 JSONRPC_RECORDING_FAILED = -32000
+RETRY_STATUSES = (429, 503)
 
 Logger = Callable[[str], None]
 Transport = Callable[[dict[str, Any]], dict[str, Any]]
 
 _TEMPLATE_FIELD = re.compile(r"\{([^{}]+)\}")
+_DELTA_SECONDS = re.compile(r"[0-9]+(?:\.[0-9]*)?|\.[0-9]+")
+# The random addition to a wait is at most this many times the stated wait, so recorders refused together
+# come back spread out: a wait of one stated second is between one and three, when the record's time allows.
+_RETRY_SPREAD = 2.0
+# A wait is started only if this much of the record's time is left after it. An attempt given less would time
+# out here while the API may still store the action, and the recorder would report it as not recorded.
+_MIN_ATTEMPT_SECONDS = 1.0
 _TOOL_STRING_FIELDS = ("action_type", "subject_kind", "action_id", "compensates")
 
 
@@ -83,7 +102,13 @@ class UnresolvedPath(LookupError):
 
 
 class RecordingError(RuntimeError):
-    """The API refused the action (HTTP 4xx/5xx) or could not be reached."""
+    """The API refused the action (HTTP 4xx/5xx) or could not be reached. ``status`` is the HTTP status, or
+    ``None`` when there was no answer; ``retry_after`` is the wait its ``Retry-After`` header stated, in
+    seconds, or ``None`` when it stated none."""
+
+    def __init__(self, message: str, *, status: int | None = None, retry_after: float | None = None):
+        super().__init__(message)
+        self.status, self.retry_after = status, retry_after
 
 
 # ---------------- mapping ----------------
@@ -303,9 +328,43 @@ def build_action(
 # ---------------- transport ----------------
 
 
-def post_action(api_url: str, api_key: str, body: dict[str, Any], *, timeout: float = 5.0) -> dict[str, Any]:
-    """``POST {api_url}/v1/actions``. Returns the decoded response; raises ``RecordingError`` on HTTP 4xx/5xx
-    or when the API cannot be reached. The key is sent in ``x-api-key`` and never logged."""
+def _parse_retry_after(value: Any, now: datetime | None = None) -> float | None:
+    """The seconds a ``Retry-After`` header asks for: delta-seconds (an integer or a decimal, zero or more) or
+    an HTTP-date, measured from ``now``; a date already past is zero. ``None`` when the header is absent or is
+    anything else, which the recorder treats as no stated wait at all."""
+    if value is None:
+        return None
+    if isinstance(value, (bytes, bytearray)):
+        value = value.decode("latin-1")
+    text = str(value).strip()
+    if _DELTA_SECONDS.fullmatch(text):
+        seconds = float(text)
+        return seconds if math.isfinite(seconds) else None
+    try:
+        when = parsedate_to_datetime(text)
+    except (TypeError, ValueError, IndexError, OverflowError):
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    try:
+        return max(0.0, (when - (now or datetime.now(timezone.utc))).total_seconds())
+    except OverflowError:
+        return None
+
+
+def _stated_wait(values: Any) -> float | None:
+    """The wait a list of ``Retry-After`` values states, in seconds, or ``None`` when none of them is readable.
+    An answer that carries the header twice (a proxy added its own) is taken at the longer wait."""
+    waits = [w for w in (_parse_retry_after(v) for v in values or ()) if w is not None]
+    return max(waits) if waits else None
+
+
+def post_action(
+    api_url: str, api_key: str, body: dict[str, Any], *, timeout: float | None = 5.0
+) -> dict[str, Any]:
+    """``POST {api_url}/v1/actions``, once. Returns the decoded response; raises ``RecordingError`` on HTTP
+    4xx/5xx (with the status and the wait the answer's ``Retry-After`` stated) or when the API cannot be
+    reached. The key is sent in ``x-api-key`` and never logged."""
     req = urllib.request.Request(
         api_url.rstrip("/") + "/v1/actions",
         data=json.dumps(body).encode(),
@@ -322,7 +381,12 @@ def post_action(api_url: str, api_key: str, body: dict[str, Any], *, timeout: fl
             raw = response.read()
     except urllib.error.HTTPError as e:
         detail = e.read().decode(errors="replace")[:300]
-        raise RecordingError(f"HTTP {e.code} from {req.full_url}: {detail or e.reason}") from e
+        stated = e.headers.get_all("retry-after") if e.headers is not None else None
+        raise RecordingError(
+            f"HTTP {e.code} from {req.full_url}: {detail or e.reason}",
+            status=e.code,
+            retry_after=_stated_wait(stated),
+        ) from e
     except (urllib.error.URLError, OSError, TimeoutError) as e:
         reason = getattr(e, "reason", None) or e
         raise RecordingError(f"cannot reach {req.full_url}: {reason}") from e
@@ -358,6 +422,16 @@ class Recorder:
     anything ``json.loads`` can return and ignore what is not a JSON-RPC object. Without an API key the
     recorder is a passthrough: nothing is posted. CLI flags for ``agent_id``/``workflow_id`` override the
     mapping file.
+
+    ``timeout`` is the time one record may take, in seconds, retries and the waits between them included. A
+    refusal the API asks to be retried (``RecordingError`` with status 429 or 503 and a ``retry_after``) is
+    waited out and the same body is posted again, ``max_retries`` times at most (``0`` turns it off) and only
+    while the stated wait and one more second for the attempt after it still fit in what is left of
+    ``timeout``, so the tool call behind the record is never held longer than ``timeout``. ``timeout=None``
+    puts no limit on the request, as it always did; a record without a limit is sent once and never retried,
+    because there is no time for a wait to fit in. A custom ``transport`` takes part by raising
+    ``RecordingError`` with ``status`` and ``retry_after``; any other exception is never retried. ``sleep``,
+    ``jitter`` and ``clock`` exist for tests.
     """
 
     def __init__(
@@ -368,12 +442,18 @@ class Recorder:
         api_url: str | None = None,
         agent_id: str | None = None,
         workflow_id: str | None = None,
-        timeout: float = 5.0,
+        timeout: float | None = 5.0,
         fail_open: bool = True,
         warn_unmapped: bool = False,
         transport: Transport | None = None,
         log: Logger = log_to_stderr,
+        max_retries: int = 2,
+        sleep: Callable[[float], None] = time.sleep,
+        jitter: Callable[[], float] = random.random,
+        clock: Callable[[], float] = time.monotonic,
     ):
+        if max_retries < 0:
+            raise ValueError("max_retries must be zero or more")
         self.mapping = mapping
         self.api_key = api_key or ""
         self.api_url = (api_url or DEFAULT_API_URL).rstrip("/")
@@ -382,6 +462,10 @@ class Recorder:
         self.timeout = timeout
         self.fail_open = fail_open
         self.warn_unmapped = warn_unmapped
+        self.max_retries = int(max_retries)
+        self._sleep = sleep
+        self._jitter = jitter
+        self._clock = clock
         self._transport = transport or self._post
         self._has_custom_transport = transport is not None
         self._log = log
@@ -394,8 +478,63 @@ class Recorder:
         """``False`` without an API key: every call is forwarded and nothing is recorded."""
         return bool(self.api_key) or self._has_custom_transport
 
-    def _post(self, body: dict[str, Any]) -> dict[str, Any]:
-        return post_action(self.api_url, self.api_key, body, timeout=self.timeout)
+    def _post(self, body: dict[str, Any], timeout: float | None = None) -> dict[str, Any]:
+        """One post. ``timeout`` is what is left of the record's time; without it the whole of ``self.timeout``."""
+        return post_action(
+            self.api_url, self.api_key, body, timeout=self.timeout if timeout is None else timeout
+        )
+
+    def _record(self, body: dict[str, Any]) -> None:
+        """Post the action. A 429 or 503 that states a wait is waited out and the same body, so the same
+        ``action_id`` and ``requested_at``, is posted again, while the wait still fits in the record's time: one
+        deadline covers every attempt and every wait, and a wait is started only if the attempt after it would
+        still have ``_MIN_ATTEMPT_SECONDS``. The last failure is raised to the fail-open policy. Nothing else
+        is retried: after a timeout or a network error nobody knows whether the action arrived."""
+        limited = self.timeout is not None
+        deadline = self._clock() + self.timeout if limited else math.inf
+        left: float | None = None  # the first attempt has the whole of ``timeout``, exactly as it was given
+        attempts = 0
+        while True:
+            attempts += 1
+            try:
+                if self._has_custom_transport:
+                    self._transport(body)
+                else:
+                    self._post(body, timeout=left)
+                return
+            except RecordingError as e:
+                refusal = e
+            stated = refusal.retry_after
+            # The time a wait may take: what is left of the record less the attempt that must follow it.
+            # Without a deadline there is none, and the record is not retried.
+            room = deadline - self._clock() - _MIN_ATTEMPT_SECONDS if limited else -1.0
+            if (
+                attempts > self.max_retries
+                or refusal.status not in RETRY_STATUSES
+                or stated is None
+                or not 0.0 <= stated < room
+            ):
+                break
+            # The stated wait, never less, plus a random share of twice as much, or of what the record's time
+            # still allows when that is less.
+            try:
+                spread = float(self._jitter())
+            except (TypeError, ValueError):
+                spread = 0.0
+            wait = stated + (min(stated * _RETRY_SPREAD, room - stated) * spread if 0.0 <= spread <= 1.0 else 0.0)
+            self._log(
+                f"action {body.get('action_id')} refused (HTTP {refusal.status}); "
+                f"retry {attempts} of {self.max_retries} in {wait:.2f} s"
+            )
+            self._sleep(wait)
+            left = deadline - self._clock()
+            if left <= 0:  # the wait ran past the deadline (a suspended machine): no attempt can be made
+                break
+        if attempts == 1:
+            raise refusal
+        raise RecordingError(
+            f"{refusal} (after {attempts} attempts)", status=refusal.status, retry_after=stated
+        ) from refusal
 
     def before_forward(self, message: Any) -> Decision:
         """Record the message if it is a mapped ``tools/call``; say whether to forward it."""
@@ -430,7 +569,7 @@ class Recorder:
             return Decision()
         action_id = body["action_id"]
         try:
-            self._transport(body)
+            self._record(body)
         except Exception as e:  # noqa: BLE001 - any failure to record is handled by the fail-open policy
             if self.fail_open:
                 self._log(f"action {action_id} not recorded ({e}); forwarding anyway")

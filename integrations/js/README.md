@@ -59,6 +59,31 @@ the activity or step runs. The gap then shows up as an effect with no recorded a
 stopped because its verifier was down. `failOpen: false` refuses the work before it starts (details per engine
 below).
 
+## When the API is busy
+
+The API refuses a request it cannot take right now with `429` or `503` and a `Retry-After` header
+(`workspace_busy`, `busy`, `rate_limited`). From 0.1.4 the `commitlayer` SDK waits the stated time and sends the
+same request again, with the same body and so the same `action_id`; its README says exactly what is retried.
+Each integration decides how much of that it wants for the client it builds from `apiKey` / `apiUrl`:
+
+| Call | SDK retry | Why |
+|---|---|---|
+| The record before a Temporal activity (the interceptor) | 2 retries, each after at most 2 seconds: at most 4 seconds of waiting before the activity body runs | Temporal cannot retry the record: fail-open swallows the failure and the activity runs unrecorded, and `failOpen: false` fails the activity non-retryably. The interceptor runs inside the activity, in the worker's ordinary Node environment and not in the workflow sandbox, so the wait is an ordinary timer; it counts against `startToCloseTimeout` and `heartbeatTimeout` |
+| The record step of `recordedStep` (Inngest) | the same | With fail-open the record step's result is memoised whether or not the record was made, so Inngest never retries it. With `failOpen: false` Inngest retries the step after its own backoff, and the short retry here usually spares that |
+| A verdict poll: `commitlayerVerify`, `waitForVerdict` | off | A failed poll fails the activity or the step, and the engine retries it under its own policy. A wait inside the SDK would also sit between two heartbeats |
+| The x402 observer | whatever the clients you pass do | The observer builds no client |
+
+`maxRetries` and `maxRetryWaitMs` beside `apiKey` override these figures for that integration; `maxRetries: 0`
+turns the retry off. A `client` you pass in keeps its own settings, and an SDK `Client` built without them
+retries 3 times after at most 10 seconds each. No other answer is retried, and neither is a network error or a
+timeout. With a `commitlayer` SDK older than 0.1.4 installed nothing is retried and the two options are ignored.
+
+The Python integrations (`commitlayer-integrations`) set no figures of their own: there the client's defaults,
+3 retries after at most 10 seconds each, apply to records and to verdict polls alike, and a smaller bound is
+given by passing a client built with one. A workflow that runs in both languages behaves the same when both
+sides are given the same figures: `maxRetries` and `maxRetryWaitMs` here, `Client(max_retries=..., max_retry_wait=...)`
+there.
+
 ## Temporal
 
 ### 1. Record activities with the interceptor
@@ -106,7 +131,7 @@ and logged. The activity's return value is passed back unchanged and never sent 
 
 `failOpen: false` throws `ApplicationFailure.nonRetryable(..., "CommitLayerRecordingFailed")` before the activity
 runs, so the workflow sees the activity fail once and decides. The factory accepts `client`, `apiKey`, `apiUrl`,
-`log`, `now`, `onRecorded(recorded, body)` and, for tests, `info: () => Info`; `parseTemporalMapping(json)`
+`maxRetries`, `maxRetryWaitMs`, `log`, `now`, `onRecorded(recorded, body)` and, for tests, `info: () => Info`; `parseTemporalMapping(json)`
 validates a mapping loaded from a file. For the deprecated `interceptors.activityInbound` list use
 `(ctx) => commitlayerActivityInterceptors(opts)(ctx).inbound`.
 
@@ -167,7 +192,8 @@ With the default template (`temporal:{workflowId}:{activityId}`) the workflow kn
 `workflowInfo().workflowId`; otherwise a business-keyed template such as `refund:{args.0.orderId}` is the simplest.
 `createCommitLayerActivities({ client, timeoutMs, intervalMs })` binds the activity to a client; the bare
 `commitlayerVerify` export reads the environment on first call. An API error propagates and the activity's retry
-policy applies; a timeout does not throw.
+policy applies, a busy answer included: the client built here does not retry a poll (see
+[When the API is busy](#when-the-api-is-busy)). A timeout does not throw.
 
 The verdict is PASS on `outcome` when every expected effect was observed, and on `policy` when additionally no
 precondition, limit or prohibition fired. `reasons.policy` names what fired (`limit_exceeded:amount`,
@@ -264,6 +290,10 @@ the agent, pass `evidence: new Client({ apiKey: EVIDENCE_KEY })` (a `facts:write
 `customer_backend`, which the x402 Service Delivery pack's contracts accept. `kind` is one of `api_call`,
 `browser_session`, `dataset`, `model_inference`, `compute_resource`, `mcp_tool_call`.
 
+The purchase is recorded before the paid request goes out, and the record is awaited. A `Client` retries a busy
+answer 3 times after at most 10 seconds each by default, and a signed payment does not stay valid forever, so
+give the observer's clients smaller figures: `new Client({ apiKey, maxRetries: 2, maxRetryWaitMs: 2_000 })`.
+
 ## Testing your wiring
 
 Nothing here needs a Temporal server or the Inngest dev server:
@@ -277,8 +307,9 @@ Nothing here needs a Temporal server or the Inngest dev server:
 - `recordedStep` and `waitForVerdict` take any object with `run(id, fn)` and `sleep(id, ms)`.
 - A `Client` from `commitlayer` built with `{ transport }` answers every request from your test.
 
-The package's own suite (`npm test`, `node --test`) does exactly this: 34 tests, settled-on-the-third-poll and
-timeout paths included.
+The package's own suite (`npm test`, `node --test`) does exactly this: 44 tests, settled-on-the-third-poll and
+timeout paths included. The five that watch a busy answer being retried need `commitlayer` 0.1.4 and are skipped
+with an earlier SDK installed.
 
 ## Limitations
 

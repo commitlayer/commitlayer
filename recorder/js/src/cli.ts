@@ -16,7 +16,8 @@ options:
   --agent-id <id>       overrides agent_id from the mapping file
   --workflow-id <id>    overrides workflow_id from the mapping file
   --api-url <url>       default $COMMITLAYER_API_URL or https://api.commitlayer.ai
-  --timeout <seconds>   per-record timeout (default 5)
+  --timeout <seconds>   time allowed for one record, retries included (default 5)
+  --retries <n>         times a record refused with 429 or 503 and Retry-After is sent again (default 2; 0 is off)
   --no-fail-open        answer the client with a JSON-RPC error instead of forwarding when recording fails
   --warn-unmapped       log once per tool name that is called but not mapped
   --version, --help
@@ -38,6 +39,7 @@ interface Parsed {
   workflowId?: string;
   apiUrl?: string;
   timeout?: number;
+  retries?: number;
   failOpen: boolean;
   warnUnmapped: boolean;
   command: string[];
@@ -81,6 +83,12 @@ function parseArgs(argv: string[]): Parsed {
         out.timeout = n;
         break;
       }
+      case "--retries": {
+        const n = Number(value(flag, inline));
+        if (!Number.isInteger(n) || n < 0) fail("--retries must be a whole number, 0 or more");
+        out.retries = n;
+        break;
+      }
       case "--no-fail-open":
         out.failOpen = false;
         break;
@@ -122,6 +130,7 @@ const code = await run({
   apiKey: process.env.COMMITLAYER_API_KEY,
   apiUrl: parsed.apiUrl ?? process.env.COMMITLAYER_API_URL,
   timeoutMs: parsed.timeout === undefined ? undefined : Math.round(parsed.timeout * 1000),
+  maxRetries: parsed.retries,
   failOpen: parsed.failOpen,
   warnUnmapped: parsed.warnUnmapped,
   agentId: parsed.agentId,

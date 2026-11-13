@@ -49,7 +49,7 @@ __all__ = [
     "settlement_status",
     "__version__",
 ]
-__version__ = "0.1.2"
+__version__ = "0.1.3"  # kept equal to pyproject.toml; tests check it
 
 log = logging.getLogger("commitlayer.x402")
 
@@ -277,7 +277,9 @@ class X402Observer:
     # ---------------- httpx ----------------
 
     def httpx_hooks(self) -> dict[str, list[Any]]:
-        """``event_hooks`` for ``httpx.Client`` / ``httpx.AsyncClient``: ``httpx.Client(event_hooks=observer.httpx_hooks())``."""
+        """``event_hooks`` for ``httpx.Client``: ``httpx.Client(event_hooks=observer.httpx_hooks())``. The hooks
+        are synchronous functions; ``httpx.AsyncClient`` awaits its hooks and cannot take them. With an async
+        client, call :meth:`on_request` and :meth:`on_response` yourself, from a worker thread."""
 
         def on_request(request: Any) -> None:
             if _header(request.headers, H_SIGNATURE):

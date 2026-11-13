@@ -7,7 +7,9 @@ from __future__ import annotations
 import base64
 import json
 
-import httpx
+import pytest
+
+httpx = pytest.importorskip("httpx", reason="httpx is not installed (pip install httpx)")
 
 from commitlayer_x402 import X402Observer, amount_from_atomic, decode_header, settlement_status
 

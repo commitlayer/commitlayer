@@ -49,7 +49,7 @@ the recorder is there; it sees the same bytes it would have seen.
 
 ```
 commitlayer-mcp-recorder --map mapping.json [--agent-id ID] [--workflow-id ID] [--api-url URL]
-    [--timeout 5] [--no-fail-open] [--warn-unmapped] -- <downstream command and args>
+    [--timeout 5] [--retries 2] [--no-fail-open] [--warn-unmapped] -- <downstream command and args>
 ```
 
 | Flag | Meaning |
@@ -57,7 +57,8 @@ commitlayer-mcp-recorder --map mapping.json [--agent-id ID] [--workflow-id ID] [
 | `--map` | Mapping file, JSON or YAML (YAML needs PyYAML). Default `$COMMITLAYER_RECORDER_MAP`. |
 | `--agent-id`, `--workflow-id` | Override `agent_id` / `workflow_id` from the mapping file. |
 | `--api-url` | Default `$COMMITLAYER_API_URL`, then `https://api.commitlayer.ai`. |
-| `--timeout` | Seconds to wait for the API per call (default 5). |
+| `--timeout` | Seconds allowed for one record, retries and the waits between them included (default 5). |
+| `--retries` | Times a record the API refused with `429` or `503` and `Retry-After` is sent again (default 2; `0` is off). See below. |
 | `--no-fail-open` | When recording fails, refuse the call instead of forwarding it (see below). |
 | `--warn-unmapped` | Log each tool that is called but not mapped, once per tool name. |
 
@@ -151,6 +152,35 @@ That is all it does with the result. **The tool's own "success" is never evidenc
 API and it does not change the verdict; CommitLayer settles the action from the facts the systems of record
 report, under the governing contract. Read the verdict with the SDK or `GET /v1/actions/{action_id}`.
 
+## When the API is busy
+
+The API refuses a write it cannot admit with `503 busy` or `429` (`workspace_busy`, `rate_limited`) and a
+`Retry-After` header, one second today. Since 0.1.3 the recorder waits the stated time and posts the same action
+again, so a busy moment does not become an action that was never recorded.
+
+- **Retried:** an answer of `429` or `503` that carries `Retry-After` (seconds or an HTTP-date), while the
+  stated wait and one more second, for the attempt after it, still fit in what is left of `--timeout`.
+- **Not retried:** every other status, a `429` or `503` without the header, a stated wait that does not fit
+  (the Developer plan's daily cap states the seconds to midnight), a timeout and an unreachable API. Those go
+  straight to the fail-open policy below.
+- **How often and how long:** `--retries 2` by default; `--retries 0` turns it off. The wait is never shorter
+  than the header states and grows by a random addition of up to twice as much, or of what the record's time
+  still allows when that is less, so recorders refused together come back spread out. The tool call is held while the recorder waits, so the bound is
+  tighter than the SDK's: one deadline, `--timeout`, covers every attempt and every wait. An attempt is given
+  only the time that is left, so a busy API holds a call no longer than an unreachable one always could: five
+  seconds by default.
+- **Room for the attempt:** no wait is started unless at least a second of `--timeout` would be left after it.
+  An attempt with less would time out in the recorder while the API may still store the action, and the
+  recorder would report, and with `--no-fail-open` refuse, a call whose action exists. With `--timeout` of
+  two seconds or less there is never that room for the one second the API states, and the record is sent once.
+- **The same action:** every attempt posts the same bytes, so the same `action_id` and `requested_at`, and the
+  API records the action once.
+
+Each retry logs one line (`action refund:order_10231 refused (HTTP 429); retry 1 of 2 in 1.86 s`). When the
+retries are used up, or the next wait does not fit, the last refusal is handled like any other failure to
+record, and its line says how many attempts were made. Every attempt is a request to the API and counts
+against the plan's write requests a minute like any other.
+
 ## Fail-open, and the alternative
 
 By default recording is fail-open: if the API answers 4xx/5xx, times out or cannot be reached, a warning is
@@ -167,12 +197,16 @@ server never sees it. Other traffic is unaffected.
 from commitlayer_mcp_recorder import Recorder, build_action, load_mapping
 
 mapping = load_mapping("mapping.json")
-recorder = Recorder(mapping, api_key="spk_...", agent_id="support-bot")
+recorder = Recorder(mapping, api_key="spk_...", agent_id="support-bot")  # timeout=5.0, max_retries=2
+# timeout=None puts no limit on the request, as before; such a record is sent once and never retried
 decision = recorder.before_forward(message)  # a parsed client message; .forward, .action_id, .error
 recorder.after_response(message)  # a parsed server message; logs the isError flag
 ```
 
 `build_action(tool_name, call_params, tool_mapping, request_id=...)` returns the body shown above.
+`post_action` sends it once and raises `RecordingError`, which carries `status` (the HTTP status, or `None` when
+there was no answer) and `retry_after` (the seconds `Retry-After` stated, or `None`). A custom `transport` is
+retried only when it raises `RecordingError` with both set; whatever else it raises is never retried.
 
 ## Limits
 

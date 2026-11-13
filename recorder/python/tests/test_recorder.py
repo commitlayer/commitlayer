@@ -22,13 +22,17 @@ FAKE_SERVER = HERE / "fake_server.py"
 if str(PACKAGE_ROOT) not in sys.path:
     sys.path.insert(0, str(PACKAGE_ROOT))
 
-from commitlayer_mcp_recorder import (  # noqa: E402 - imported after the path is set
+import commitlayer_mcp_recorder  # noqa: E402 - imported after the path is set
+from commitlayer_mcp_recorder import (  # noqa: E402
     LOG_PREFIX,
     MappingError,
     Recorder,
+    RecordingError,
     UnresolvedPath,
+    __version__,
     build_action,
     load_mapping,
+    post_action,
 )
 
 TEST_KEY = "local-test-key"
@@ -59,24 +63,31 @@ class Captured:
     path: str
     headers: dict[str, str]
     body: dict[str, Any]
+    raw: bytes = b""
 
 
 class FakeApi:
+    """Answers ``status`` to every request, after the answers queued in ``script`` (a status and the extra
+    response headers, such as ``Retry-After``) have been used up, one per request."""
+
     def __init__(self) -> None:
         self.requests: list[Captured] = []
         self.status = 201
+        self.script: list[tuple[int, dict[str, str]]] = []
         self._lock = threading.Lock()
         api = self
 
         class Handler(BaseHTTPRequestHandler):
             def do_POST(self) -> None:  # noqa: N802 - http.server naming
                 length = int(self.headers.get("content-length") or 0)
-                body = json.loads(self.rfile.read(length) or b"{}")
+                raw = self.rfile.read(length)
+                body = json.loads(raw or b"{}")
                 with api._lock:
                     api.requests.append(
-                        Captured(self.path, {k.lower(): v for k, v in self.headers.items()}, body)
+                        Captured(self.path, {k.lower(): v for k, v in self.headers.items()}, body, raw)
                     )
-                if api.status >= 400:
+                    status, extra = api.script.pop(0) if api.script else (api.status, {})
+                if status >= 400:
                     payload = {"error": {"code": "server_error", "message": "simulated failure"}}
                 else:
                     payload = {
@@ -84,7 +95,9 @@ class FakeApi:
                         "verification": {"summary": {"headline": "pending"}},
                     }
                 data = json.dumps(payload).encode()
-                self.send_response(api.status)
+                self.send_response(status)
+                for name, value in extra.items():
+                    self.send_header(name, value)
                 self.send_header("content-type", "application/json")
                 self.send_header("content-length", str(len(data)))
                 self.end_headers()
@@ -631,3 +644,415 @@ def test_recorder_matches_responses_by_exact_id() -> None:
     )
     assert "recorded refund:o1 → tool result isError=true" in logged
     assert recorder.pending() == {}
+
+
+# ---------------- retries: 429 and 503 with Retry-After ----------------
+
+REFUND_CALL = {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "tools/call",
+    "params": {"name": "refund_payment", "arguments": {"order_id": "o1"}},
+}
+
+
+@pytest.fixture
+def direct(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The fake API is on a loopback port and must be reached directly, whatever proxy the environment names."""
+    for name in ("NO_PROXY", "no_proxy"):
+        monkeypatch.setenv(name, "127.0.0.1,localhost")
+
+
+class FakeClock:
+    """A clock that only moves when the recorder waits, so the time left for a record is exact."""
+
+    def __init__(self) -> None:
+        self.now = 1000.0
+        self.waits: list[float] = []
+
+    def __call__(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.waits.append(seconds)
+        self.now += seconds
+
+
+def recorder_for(api: FakeApi | None, **options: Any) -> tuple[Recorder, list[float], list[str]]:
+    """A recorder whose waits move a fake clock instead of sleeping and whose jitter is zero. With an API it
+    posts over HTTP; without one the caller passes a ``transport``."""
+    clock = FakeClock()
+    logged: list[str] = []
+    options.setdefault("jitter", lambda: 0.0)
+    if api is not None:
+        options.update(api_key=TEST_KEY, api_url=api.url)
+    recorder = Recorder(load_mapping(MAPPING), sleep=clock.sleep, clock=clock, log=logged.append, **options)
+    return recorder, clock.waits, logged
+
+
+def refusing(*failures: RecordingError) -> Any:
+    """A transport that raises the given failures in turn and then records."""
+    left = list(failures)
+    calls: list[dict[str, Any]] = []
+
+    def transport(body: dict[str, Any]) -> dict[str, Any]:
+        calls.append(body)
+        if left:
+            raise left.pop(0)
+        return {}
+
+    transport.calls = calls  # type: ignore[attr-defined]
+    return transport
+
+
+def busy(status: int = 503, retry_after: float | None = 1.0) -> RecordingError:
+    return RecordingError(f"HTTP {status}", status=status, retry_after=retry_after)
+
+
+def test_version_constant_matches_the_package_version() -> None:
+    text = (PACKAGE_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    declared = re.search(r'(?m)^version = "([^"]+)"$', text)
+    assert declared is not None and __version__ == declared.group(1)
+
+
+def test_post_action_error_carries_the_status_and_the_stated_wait(api: FakeApi, direct: None) -> None:
+    api.script = [
+        (429, {"Retry-After": "1"}),
+        (503, {"retry-after": "2.5"}),
+        (503, {}),
+        (500, {"Retry-After": "1"}),
+        # the header twice (a proxy added its own): the longer wait is the one stated, whichever came first
+        (503, {"Retry-After": "1", "retry-after": "3600"}),
+        (503, {"Retry-After": "3600", "retry-after": "1"}),
+        (429, {"Retry-After": "soon", "retry-after": "2"}),
+    ]
+    seen = []
+    for _ in api.script[:]:
+        with pytest.raises(RecordingError) as e:
+            post_action(api.url, TEST_KEY, {"action_id": "a"})
+        seen.append((e.value.status, e.value.retry_after))
+        assert str(e.value).startswith(f"HTTP {e.value.status} from {api.url}/v1/actions: ")
+    assert seen == [(429, 1.0), (503, 2.5), (503, None), (500, 1.0), (503, 3600.0), (503, 3600.0), (429, 2.0)]
+    with pytest.raises(RecordingError) as e:
+        post_action("http://127.0.0.1:9", TEST_KEY, {"action_id": "a"}, timeout=2)
+    assert (e.value.status, e.value.retry_after) == (None, None)
+    plain = RecordingError("as it was raised before")
+    assert (str(plain), plain.status, plain.retry_after) == ("as it was raised before", None, None)
+
+
+@pytest.mark.parametrize("status", [429, 503])
+def test_one_refusal_then_success_is_recorded_with_the_same_body(api: FakeApi, direct: None, status: int) -> None:
+    api.script = [(status, {"Retry-After": "1"})]
+    recorder, waits, logged = recorder_for(api)
+    decision = recorder.before_forward(REFUND_CALL)
+    assert decision.forward and decision.action_id == "refund:o1" and decision.error is None
+    assert waits == [1.0]
+    assert len(api.requests) == 2 and api.requests[0].raw == api.requests[1].raw  # byte for byte
+    assert api.requests[0].body["action_id"] == "refund:o1"
+    assert logged == [
+        f"action refund:o1 refused (HTTP {status}); retry 1 of 2 in 1.00 s",
+        "recorded refund:o1 for tool 'refund_payment'",
+    ]
+    assert recorder.pending() == {"1": "refund:o1"}
+    assert TEST_KEY not in "".join(logged)
+
+
+def test_default_action_id_and_request_time_are_the_same_on_the_retry(api: FakeApi, direct: None) -> None:
+    api.script = [(503, {"Retry-After": "0.5"})]
+    mapping = {"tools": {"lookup_order": {"contract_id": "c", "subject": "arguments.order_id"}}}
+    clock = FakeClock()
+    recorder = Recorder(
+        load_mapping(mapping), api_key=TEST_KEY, api_url=api.url, sleep=clock.sleep, clock=clock,
+        jitter=lambda: 0.0, log=lambda line: None,
+    )  # fmt: skip
+    message = {"jsonrpc": "2.0", "id": "req-9", "method": "tools/call", "params": {"name": "lookup_order", "arguments": {"order_id": "o9"}}}  # fmt: skip
+    assert recorder.before_forward(message).action_id == "mcp:lookup_order:req-9"
+    assert clock.waits == [0.5] and api.requests[0].raw == api.requests[1].raw
+    assert api.requests[1].body["action_id"] == "mcp:lookup_order:req-9"
+
+
+def test_refusals_past_the_limit_fall_to_the_fail_open_policy(api: FakeApi, direct: None) -> None:
+    refusals = [(429, {"Retry-After": "1"}), (503, {"Retry-After": "1"}), (429, {"Retry-After": "1"}), (201, {})]
+    api.script = list(refusals)
+    recorder, waits, logged = recorder_for(api)  # two retries is the default
+    decision = recorder.before_forward(REFUND_CALL)
+    assert decision.forward and decision.action_id is None and decision.error is None
+    assert waits == [1.0, 1.0] and len(api.requests) == 3 and len({r.raw for r in api.requests}) == 1
+    assert logged[:2] == [
+        "action refund:o1 refused (HTTP 429); retry 1 of 2 in 1.00 s",
+        "action refund:o1 refused (HTTP 503); retry 2 of 2 in 1.00 s",
+    ]
+    assert logged[2].startswith("action refund:o1 not recorded (HTTP 429 from ")  # the last answer
+    assert logged[2].endswith("(after 3 attempts)); forwarding anyway")
+    assert recorder.pending() == {}
+
+    api.requests.clear()
+    api.script = list(refusals)
+    recorder, waits, logged = recorder_for(api, fail_open=False, max_retries=1)
+    decision = recorder.before_forward(REFUND_CALL)
+    assert not decision.forward and decision.action_id == "refund:o1"
+    assert decision.error is not None
+    message = decision.error["error"]["message"]
+    assert message.startswith("CommitLayer recording failed: HTTP 503 from ") and message.endswith("(after 2 attempts)")
+    assert waits == [1.0] and len(api.requests) == 2
+
+    api.requests.clear()
+    api.script = list(refusals)
+    recorder, waits, logged = recorder_for(api, max_retries=3)
+    assert recorder.before_forward(REFUND_CALL).action_id == "refund:o1"
+    assert waits == [1.0, 1.0, 1.0] and len(api.requests) == 4
+
+
+@pytest.mark.parametrize(
+    ("status", "headers"),
+    [
+        (400, {"Retry-After": "1"}),
+        (402, {"Retry-After": "1"}),
+        (409, {"Retry-After": "1"}),
+        (500, {"Retry-After": "1"}),
+        (502, {"Retry-After": "1"}),
+        (429, {}),
+        (503, {}),
+        (429, {"Retry-After": "soon"}),
+        (503, {"Retry-After": "-1"}),
+        (429, {"Retry-After": "9" * 400}),
+        (429, {"Retry-After": "5"}),  # the whole of the record's five seconds: it cannot fit
+        (429, {"Retry-After": "4"}),  # it fits, but the attempt after it would not have its second
+        (503, {"Retry-After": "1", "retry-after": "41213"}),  # stated twice: the longer wait counts
+        (429, {"Retry-After": "41213"}),  # the daily cap states the seconds to midnight
+    ],
+)
+def test_nothing_else_is_retried_or_waited(api: FakeApi, direct: None, status: int, headers: dict[str, str]) -> None:
+    api.script = [(status, headers)]
+    recorder, waits, logged = recorder_for(api, max_retries=3)
+    decision = recorder.before_forward(REFUND_CALL)
+    assert decision.forward and decision.action_id is None  # fail-open: forwarded, not recorded
+    assert waits == [] and len(api.requests) == 1
+    assert len(logged) == 1 and logged[0].startswith(f"action refund:o1 not recorded (HTTP {status} from ")
+    assert "attempts" not in logged[0]
+
+
+def test_every_attempt_and_every_wait_fit_in_the_time_of_one_record() -> None:
+    # six seconds for the record, the API asks for two each time: two waits fit with a second left for the
+    # third attempt; a third wait would end at the deadline
+    transport = refusing(*[busy(retry_after=2.0) for _ in range(4)])
+    recorder, waits, logged = recorder_for(None, transport=transport, max_retries=10, timeout=6.0)
+    decision = recorder.before_forward(REFUND_CALL)
+    assert decision.forward and decision.action_id is None
+    assert waits == [2.0, 2.0] and sum(waits) < 6.0 and len(transport.calls) == 3
+    assert logged[-1] == "action refund:o1 not recorded (HTTP 503 (after 3 attempts)); forwarding anyway"
+
+    # a wait is started only when a second of the record's time is left for the attempt after it
+    transport = refusing(busy(retry_after=2.0))
+    recorder, waits, logged = recorder_for(None, transport=transport, timeout=3.0)
+    assert recorder.before_forward(REFUND_CALL).action_id is None and waits == [] and len(transport.calls) == 1
+    transport = refusing(busy(retry_after=1.99))
+    recorder, waits, logged = recorder_for(None, transport=transport, timeout=3.0)
+    assert recorder.before_forward(REFUND_CALL).action_id == "refund:o1" and waits == [1.99]
+
+
+def test_a_refusal_that_arrives_late_is_not_followed_by_an_attempt_with_no_time_to_finish() -> None:
+    # The API held the request 3.9 s before refusing it. A retry after the stated second would have a tenth of
+    # a second: it would time out here while the API may still store the action, and the recorder would then
+    # refuse a tool call whose action exists. So the record is sent once, and what the recorder says is true.
+    clock = FakeClock()
+    calls: list[dict[str, Any]] = []
+    logged: list[str] = []
+
+    def slow_refusal(body: dict[str, Any]) -> dict[str, Any]:
+        calls.append(body)
+        if len(calls) == 1:
+            clock.now += 3.9
+            raise busy(503, 1.0)
+        return {}
+
+    recorder = Recorder(
+        load_mapping(MAPPING), transport=slow_refusal, sleep=clock.sleep, clock=clock, jitter=lambda: 0.0,
+        log=logged.append, fail_open=False,
+    )  # fmt: skip
+    decision = recorder.before_forward(REFUND_CALL)
+    assert not decision.forward and len(calls) == 1 and clock.waits == []
+    assert logged == ["action refund:o1 not recorded (HTTP 503); call refused because fail-open is off"]
+
+    # the same refusal one second earlier leaves room for the wait and a second for the attempt
+    clock.now, calls[:] = 1000.0, []
+    held = [2.9]
+
+    def refusal_in_time(body: dict[str, Any]) -> dict[str, Any]:
+        calls.append(body)
+        if held:
+            clock.now += held.pop()
+            raise busy(503, 1.0)
+        return {}
+
+    recorder = Recorder(
+        load_mapping(MAPPING), transport=refusal_in_time, sleep=clock.sleep, clock=clock, jitter=lambda: 0.0,
+        log=logged.append, fail_open=False,
+    )  # fmt: skip
+    assert recorder.before_forward(REFUND_CALL).forward and len(calls) == 2 and clock.waits == [1.0]
+
+
+def test_a_wait_that_runs_past_the_deadline_is_not_followed_by_an_attempt() -> None:
+    clock = FakeClock()
+    transport = refusing(busy(503, 1.0))
+
+    def overslept(seconds: float) -> None:  # the machine was suspended during the wait
+        clock.waits.append(seconds)
+        clock.now += 60.0
+
+    logged: list[str] = []
+    recorder = Recorder(
+        load_mapping(MAPPING), transport=transport, sleep=overslept, clock=clock, jitter=lambda: 0.0, log=logged.append
+    )
+    decision = recorder.before_forward(REFUND_CALL)
+    assert decision.forward and decision.action_id is None
+    assert clock.waits == [1.0] and len(transport.calls) == 1
+    assert logged[-1] == "action refund:o1 not recorded (HTTP 503); forwarding anyway"
+
+
+def test_without_a_timeout_the_record_is_sent_once_as_it_always_was(
+    api: FakeApi, direct: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # timeout=None is no limit on the request; it recorded before retries existed and still does
+    recorder, waits, logged = recorder_for(api, timeout=None)
+    assert recorder.before_forward(REFUND_CALL).action_id == "refund:o1"
+    assert len(api.requests) == 1 and logged == ["recorded refund:o1 for tool 'refund_payment'"]
+
+    # with no limit there is no time for a wait to fit in, so a refusal is not retried
+    api.requests.clear()
+    api.script = [(503, {"Retry-After": "1"})]
+    recorder, waits, logged = recorder_for(api, timeout=None)
+    assert recorder.before_forward(REFUND_CALL).action_id is None
+    assert waits == [] and len(api.requests) == 1 and "attempts" not in logged[0]
+
+    given: list[float | None] = []
+
+    def fake_post(api_url: str, api_key: str, body: dict[str, Any], *, timeout: float | None) -> dict[str, Any]:
+        given.append(timeout)
+        return {}
+
+    monkeypatch.setattr(commitlayer_mcp_recorder, "post_action", fake_post)
+    recorder, waits, logged = recorder_for(api, timeout=None)
+    assert recorder.before_forward(REFUND_CALL).action_id == "refund:o1" and given == [None]
+
+
+def test_the_time_left_is_what_each_attempt_is_given(monkeypatch: pytest.MonkeyPatch) -> None:
+    given: list[float] = []
+    failures = [busy(429, 1.0), busy(503, 1.5)]
+
+    def fake_post(api_url: str, api_key: str, body: dict[str, Any], *, timeout: float) -> dict[str, Any]:
+        given.append(timeout)
+        if failures:
+            raise failures.pop(0)
+        return {}
+
+    monkeypatch.setattr(commitlayer_mcp_recorder, "post_action", fake_post)
+    clock = FakeClock()
+    recorder = Recorder(
+        load_mapping(MAPPING), api_key=TEST_KEY, sleep=clock.sleep, clock=clock, jitter=lambda: 0.0, log=lambda m: None
+    )
+    assert recorder.before_forward(REFUND_CALL).action_id == "refund:o1"
+    assert clock.waits == [1.0, 1.5] and given == [5.0, 4.0, 2.5]
+
+
+def test_retries_can_be_turned_off(api: FakeApi, direct: None) -> None:
+    api.script = [(503, {"Retry-After": "1"})]
+    recorder, waits, logged = recorder_for(api, max_retries=0)
+    assert recorder.before_forward(REFUND_CALL).action_id is None
+    assert waits == [] and len(api.requests) == 1
+    assert logged == [logged[0]] and "attempts" not in logged[0]
+    with pytest.raises(ValueError):
+        Recorder(load_mapping(MAPPING), max_retries=-1)
+
+
+def test_the_wait_is_never_below_what_was_stated_and_the_addition_keeps_to_the_time_the_record_has() -> None:
+    def waits_for(stated: float, spread: Any, timeout: float = 5.0) -> list[float]:
+        recorder, waits, _ = recorder_for(
+            None, transport=refusing(busy(retry_after=stated)), jitter=lambda: spread, timeout=timeout
+        )
+        assert recorder.before_forward(REFUND_CALL).action_id == "refund:o1"
+        return waits
+
+    # the stated second and a share of up to two more
+    assert waits_for(1.0, 0.0) == [1.0]
+    assert waits_for(1.0, 0.5) == [2.0]
+    assert waits_for(1.0, 1.0) == [3.0]
+    assert waits_for(1.0, 9.0) == [1.0] and waits_for(1.0, -1.0) == [1.0]
+    assert waits_for(1.0, None) == [1.0] and waits_for(1.0, "x") == [1.0] and waits_for(1.0, float("nan")) == [1.0]
+    # with 3.5 s for the record, a wait may take 2.5 and leave the attempt its second: the addition is a share
+    # of the 1.5 s that allows, so the waits are still spread and the attempt after them still has its time
+    assert waits_for(1.0, 1.0, timeout=3.5) == [2.5]
+    assert waits_for(1.0, 0.5, timeout=3.5) == [1.75]
+    assert waits_for(1.0, 0.0, timeout=3.5) == [1.0]
+    assert waits_for(0.0, 1.0) == [0.0]
+
+
+def test_a_transport_that_raises_anything_else_is_called_once() -> None:
+    for failure in (RuntimeError("boom"), TimeoutError("timed out"), RecordingError("cannot reach the API")):
+        calls: list[dict[str, Any]] = []
+        logged: list[str] = []
+
+        def transport(
+            body: dict[str, Any], failure: Exception = failure, calls: list[dict[str, Any]] = calls
+        ) -> dict[str, Any]:
+            calls.append(body)
+            raise failure
+
+        recorder = Recorder(
+            load_mapping(MAPPING),
+            transport=transport,
+            sleep=lambda s: pytest.fail("slept"),
+            log=logged.append,
+            max_retries=3,
+        )
+        decision = recorder.before_forward(REFUND_CALL)
+        assert decision.forward and decision.action_id is None and len(calls) == 1
+        assert logged == [f"action refund:o1 not recorded ({failure}); forwarding anyway"]
+
+
+def test_retry_after_is_read_as_seconds_or_as_an_http_date() -> None:
+    from datetime import datetime, timezone
+
+    parse = commitlayer_mcp_recorder._parse_retry_after
+    now = datetime(2026, 11, 13, 10, 0, 0, tzinfo=timezone.utc)  # noqa: UP017 - Python 3.10
+    assert [parse(v, now) for v in ("0", "1", "1.5", " 2 ", ".5")] == [0.0, 1.0, 1.5, 2.0, 0.5]
+    assert parse("Fri, 13 Nov 2026 10:00:02 GMT", now) == 2.0
+    assert parse("Fri, 13 Nov 2026 09:00:00 GMT", now) == 0.0
+    for garbage in (None, "", "soon", "-1", "+1", "1e3", "NaN", "inf", "0x10", "1,5", "9" * 400):
+        assert parse(garbage, now) is None
+
+
+def test_cli_retries_a_refused_action_and_then_forwards_the_call(tmp_path: Path, api: FakeApi) -> None:
+    api.script = [(429, {"Retry-After": "1"})]
+    line = call(11, "refund_payment", {"order_id": "o11"})
+    run = run_recorder(tmp_path, [line], api_url=api.url)
+    assert len(api.requests) == 2 and api.requests[0].raw == api.requests[1].raw
+    assert run.received_by_server == [line]
+    assert run.response(11)["result"]["isError"] is False
+    # the real spread: the stated second and up to two more
+    line = re.compile(r"action refund:o11 refused \(HTTP 429\); retry 1 of 2 in [12]\.\d\d s")
+    refused = [d for d in run.diagnostics if line.fullmatch(d)]
+    assert len(refused) == 1
+    assert "recorded refund:o11 for tool 'refund_payment'" in run.diagnostics
+    assert TEST_KEY not in run.stderr
+
+
+def test_cli_retries_zero_and_a_short_timeout_send_the_record_once(tmp_path: Path, api: FakeApi) -> None:
+    api.script = [(503, {"Retry-After": "1"})]
+    line = call(12, "refund_payment", {"order_id": "o12"})
+    run = run_recorder(tmp_path, [line], api_url=api.url, args=["--retries", "0"])
+    assert len(api.requests) == 1
+    assert run.received_by_server == [line]
+    assert any(d.startswith("action refund:o12 not recorded (HTTP 503") for d in run.diagnostics)
+
+    # one second for the record and the API asks for one second: the wait does not fit, so there is no retry
+    api.requests.clear()
+    api.script = [(503, {"Retry-After": "1"})]
+    short = tmp_path / "short"
+    short.mkdir()
+    run = run_recorder(short, [line], api_url=api.url, args=["--timeout", "1"])
+    assert len(api.requests) == 1 and run.received_by_server == [line]
+    assert not any("refused" in d for d in run.diagnostics)
+
+    bad = run_recorder(short, [], api_url=api.url, args=["--retries", "-1"])
+    assert bad.returncode == 2 and "--retries must be a whole number, 0 or more" in bad.stderr

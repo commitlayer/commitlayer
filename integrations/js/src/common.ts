@@ -6,9 +6,15 @@
  * the governing contract, or the final evidence.
  */
 
-import { Client, CommitLayerError, type Json, type RecordActionOptions } from "commitlayer";
+import {
+  Client,
+  CommitLayerError,
+  type ClientOptions as SdkClientOptions,
+  type Json,
+  type RecordActionOptions,
+} from "commitlayer";
 
-export const VERSION = "0.1.3";
+export const VERSION = "0.1.4";
 
 export type { Json, RecordActionOptions };
 export { Client, CommitLayerError };
@@ -28,12 +34,50 @@ export interface ClientOptions {
   apiUrl?: string;
   /** Per-request timeout of the client built here; default 20s. */
   timeoutMs?: number;
+  /**
+   * How many times the client built here sends a request again after the API refused it with 429 or 503 and a
+   * `Retry-After` header; 0 turns it off. Each integration sets its own default: a record in front of an
+   * activity or a step retries twice, a verdict poll does not retry (the workflow engine retries it). Needs
+   * `commitlayer` 0.1.4 or later: an earlier SDK ignores it and never retries. A `client` passed in keeps
+   * its own settings.
+   */
+  maxRetries?: number;
+  /** The longest wait before one such retry, in milliseconds. A longer `Retry-After` is an error at once. */
+  maxRetryWaitMs?: number;
 }
 
-/** The client from the options, or a new `Client`. Throws when no key is available. */
-export function resolveClient(opts: ClientOptions): ActionClient {
+/** The retry settings an integration gives the client it builds when the caller sets none. */
+export interface RetrySettings {
+  maxRetries?: number;
+  maxRetryWaitMs?: number;
+}
+
+/**
+ * For a record that sits in front of the caller's own timed work (an activity, a step): two retries of at most
+ * two seconds each, so the record adds four seconds of waiting at most. The API's busy answers state one second.
+ */
+export const INLINE_RETRY: Readonly<RetrySettings> = Object.freeze({ maxRetries: 2, maxRetryWaitMs: 2_000 });
+
+/** For a call the workflow engine retries itself (a verdict poll in an activity or a step): the SDK does not. */
+export const NO_RETRY: Readonly<RetrySettings> = Object.freeze({ maxRetries: 0 });
+
+/**
+ * The options the SDK's `Client` is built with: the caller's own, then the integration's retry settings for
+ * what the caller left unset. Without either the SDK's defaults apply (3 retries, 10 seconds).
+ */
+export function sdkClientOptions(opts: ClientOptions, retry: Readonly<RetrySettings> = {}): SdkClientOptions & RetrySettings {
+  const out: SdkClientOptions & RetrySettings = { apiKey: opts.apiKey, apiUrl: opts.apiUrl, timeoutMs: opts.timeoutMs };
+  const maxRetries = opts.maxRetries ?? retry.maxRetries;
+  const maxRetryWaitMs = opts.maxRetryWaitMs ?? retry.maxRetryWaitMs;
+  if (maxRetries !== undefined) out.maxRetries = maxRetries;
+  if (maxRetryWaitMs !== undefined) out.maxRetryWaitMs = maxRetryWaitMs;
+  return out;
+}
+
+/** The client from the options, or a new `Client` with the given retry settings. Throws when no key is available. */
+export function resolveClient(opts: ClientOptions, retry?: Readonly<RetrySettings>): ActionClient {
   if (opts.client) return opts.client;
-  return new Client({ apiKey: opts.apiKey, apiUrl: opts.apiUrl, timeoutMs: opts.timeoutMs });
+  return new Client(sdkClientOptions(opts, retry));
 }
 
 /** The body of `POST /v1/actions` (ActionIn in docs/API.md). */

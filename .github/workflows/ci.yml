@@ -17,7 +17,7 @@ jobs:
       - name: Tests without any framework or runtime installed
         run: |
           python -m pip install -q pytest ./sdk/python ./recorder/python ./integrations/python
-          python -m pytest -q integrations/python/tests recorder/python/tests
+          python -m pytest -q sdk/python/tests integrations/python/tests recorder/python/tests
       - name: Tests with the two workflow runtimes
         run: |
           python -m pip install -q './integrations/python[temporal,inngest]'
@@ -36,4 +36,6 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: "${{ matrix.node }}" }
-      - run: for d in sdk/js recorder/js integrations/js; do (cd $d && npm ci && npm run build && npm test); done
+      # The integrations are tested against this checkout's SDK, not the published one, so a change to both is
+      # tested together (the install is not saved: package.json and the lock stay as committed).
+      - run: for d in sdk/js recorder/js integrations/js; do (cd $d && npm ci && { [ $d != integrations/js ] || npm install --no-save ../../sdk/js; } && npm run build && npm test); done

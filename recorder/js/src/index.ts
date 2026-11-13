@@ -10,6 +10,10 @@
  * goes to stderr. The proxy never blocks, reorders or alters the agent's traffic; the record for one line
  * completes (or fails) before that line is forwarded, and later lines queue behind it.
  *
+ * A record the API refuses with 429 or 503 and a `Retry-After` header is sent again after the stated wait, with
+ * the same body. The waits and the retries happen inside the record's own time (`timeoutMs`), so a retry never
+ * adds to how long a tool call can be held.
+ *
  * The agent may declare its intent. It may read the verdict. It must never control the independent facts,
  * the governing contract, or the final evidence.
  */
@@ -19,7 +23,7 @@ import { readFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 import type { Readable, Writable } from "node:stream";
 
-export const VERSION = "0.1.3";
+export const VERSION = "0.1.4";
 
 export type Json = Record<string, unknown>;
 
@@ -302,8 +306,14 @@ export interface RecorderOptions {
   apiKey?: string;
   /** Default https://api.commitlayer.ai. */
   apiUrl?: string;
-  /** Per-record timeout; default 5000. */
+  /** The time one record may take, retries and the waits between them included; default 5000. */
   timeoutMs?: number;
+  /**
+   * How many times a record the API refuses with 429 or 503 and a `Retry-After` header is sent again; default 2,
+   * 0 turns it off. A retry is made only while the stated wait, and one more second for the attempt after it,
+   * still fit in `timeoutMs`.
+   */
+  maxRetries?: number;
   /** Forward the call when recording fails (default true). Otherwise answer the client with a JSON-RPC error. */
   failOpen?: boolean;
   /** Log once per unmapped tool name. */
@@ -316,6 +326,9 @@ export interface RecorderOptions {
   /** Injectable for tests. */
   fetch?: typeof fetch;
   now?: () => string;
+  /** The wait before a retry and the random source of its addition, in [0, 1); injectable for tests. */
+  sleep?: (ms: number) => Promise<void>;
+  random?: () => number;
 }
 
 /** What to do with one client-to-server line: forward it, or answer the client instead. */
@@ -353,9 +366,48 @@ function defaultLog(message: string): void {
   process.stderr.write(`commitlayer-recorder: ${message}\n`);
 }
 
+function defaultSleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * The random addition to a wait is at most this many times the stated wait, so recorders refused together come
+ * back spread over that time: the API admits a few writes of one workspace at once and refuses the rest, and
+ * records that return within the same quarter second are refused together again.
+ */
+const RETRY_SPREAD = 2;
+
+/**
+ * A wait is made only when the attempt after it would still have this long. An attempt started with less
+ * would time out in the recorder while the API may still store the action.
+ */
+const MIN_ATTEMPT_MS = 1000;
+
+const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+
+/**
+ * A `Retry-After` header as milliseconds from `nowMs`: a number of seconds (whole or decimal, zero or more) or
+ * an HTTP-date. Undefined when it is absent or anything else; such an answer is never retried.
+ */
+function retryAfterMs(header: string | null | undefined, nowMs: number): number | undefined {
+  const value = header?.trim();
+  if (!value) return undefined;
+  if (/^(\d+(\.\d*)?|\.\d+)$/.test(value)) {
+    const ms = Math.ceil(Number((Number(value) * 1000).toFixed(3))); // rounded up: never shorter than stated
+    return Number.isFinite(ms) ? ms : undefined;
+  }
+  const m = /^[A-Za-z]{3}, (\d{2}) ([A-Za-z]{3}) (\d{4}) (\d{2}):(\d{2}):(\d{2}) GMT$/.exec(value);
+  if (!m) return undefined;
+  const month = MONTHS.indexOf(m[2].toLowerCase());
+  if (month < 0) return undefined;
+  const at = Date.UTC(Number(m[3]), month, Number(m[1]), Number(m[4]), Number(m[5]), Number(m[6]));
+  return Number.isFinite(at) ? Math.max(0, at - nowMs) : undefined;
+}
+
 export class Recorder {
   readonly apiUrl: string;
   readonly timeoutMs: number;
+  readonly maxRetries: number;
   readonly failOpen: boolean;
   readonly warnUnmapped: boolean;
   readonly agentId: string | undefined;
@@ -368,6 +420,8 @@ export class Recorder {
   private readonly log: (message: string) => void;
   private readonly fetchImpl: typeof fetch;
   private readonly clock: () => string;
+  private readonly sleep: (ms: number) => Promise<void>;
+  private readonly random: () => number;
   private readonly pending = new Map<string, { actionId: string; tool: string }>();
   private readonly warnedUnmapped = new Set<string>();
 
@@ -376,6 +430,9 @@ export class Recorder {
     this.apiKey = opts.apiKey ?? "";
     this.apiUrl = (opts.apiUrl || "https://api.commitlayer.ai").replace(/\/+$/, "");
     this.timeoutMs = opts.timeoutMs ?? 5000;
+    const retries = opts.maxRetries ?? 2;
+    if (typeof retries !== "number" || !Number.isFinite(retries) || retries < 0) throw new Error("maxRetries must be zero or more");
+    this.maxRetries = Math.floor(retries);
     this.failOpen = opts.failOpen ?? true;
     this.warnUnmapped = opts.warnUnmapped ?? false;
     this.agentId = opts.agentId ?? opts.mapping.agent_id;
@@ -383,6 +440,8 @@ export class Recorder {
     this.log = opts.log ?? defaultLog;
     this.fetchImpl = opts.fetch ?? fetch;
     this.clock = opts.now ?? now;
+    this.sleep = opts.sleep ?? defaultSleep;
+    this.random = opts.random ?? Math.random;
     this.recording = this.apiKey !== "";
     if (!this.recording) {
       this.log("COMMITLAYER_API_KEY is not set: running as a passthrough, nothing is recorded");
@@ -426,7 +485,7 @@ export class Recorder {
     }
 
     try {
-      await this.post(body);
+      await this.post(body, tool);
     } catch (e) {
       const reason = messageOf(e);
       if (this.failOpen) {
@@ -463,23 +522,53 @@ export class Recorder {
     this.log(`recorded ${rec.actionId} → tool result isError=${isError}`);
   }
 
-  private async post(body: ActionBody): Promise<void> {
+  /**
+   * Send one record. An answer of 429 or 503 that carries `Retry-After` is sent again after the stated wait, at
+   * most `maxRetries` times and only while that wait still fits in the record's time: one deadline covers every
+   * attempt and every wait, so the line behind this record is held for `timeoutMs` at most, as without retries,
+   * and a wait is started only if the attempt after it would still have `MIN_ATTEMPT_MS`. No other answer is
+   * retried, and neither is a network error or the timeout. Every attempt sends the same bytes, so the same
+   * `action_id` and `requested_at`.
+   */
+  private async post(body: ActionBody, tool: string): Promise<void> {
+    const payload = JSON.stringify(body);
     const controller = new AbortController();
+    const deadline = Date.now() + this.timeoutMs;
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
     try {
-      const res = await this.fetchImpl(`${this.apiUrl}/v1/actions`, {
-        method: "POST",
-        headers: {
-          "x-api-key": this.apiKey,
-          "content-type": "application/json",
-          accept: "application/json",
-          "user-agent": `commitlayer-mcp-recorder/${VERSION}`,
-        },
-        body: JSON.stringify(body),
-        signal: controller.signal,
-      });
-      const text = await res.text().catch(() => "");
-      if (res.status >= 400) throw new Error(`HTTP ${res.status}${describeApiError(text)}`);
+      for (let attempt = 1; ; attempt++) {
+        const res = await this.fetchImpl(`${this.apiUrl}/v1/actions`, {
+          method: "POST",
+          headers: {
+            "x-api-key": this.apiKey,
+            "content-type": "application/json",
+            accept: "application/json",
+            "user-agent": `commitlayer-mcp-recorder/${VERSION}`,
+          },
+          body: payload,
+          signal: controller.signal,
+        });
+        const text = await res.text().catch(() => "");
+        if (res.status < 400) return;
+        const failure = `HTTP ${res.status}${describeApiError(text)}`;
+        const retryable = (res.status === 429 || res.status === 503) && attempt <= this.maxRetries;
+        // Read with care: a `fetch` supplied by the caller may answer without headers, and that is no wait.
+        const header = retryable ? (res.headers as Headers | undefined)?.get?.("retry-after") : undefined;
+        const stated = retryAfterMs(header, Date.now());
+        // The time a wait may take: what is left of the record less the attempt that must follow it.
+        const room = deadline - Date.now() - MIN_ATTEMPT_MS;
+        if (stated === undefined || stated >= room) {
+          throw new Error(attempt > 1 ? `${failure} (after ${attempt} attempts)` : failure);
+        }
+        // The stated wait, never less, plus a random share of twice as much, or of what the record's time still
+        // allows when that is less.
+        const r = this.random();
+        const waitMs = stated + (r > 0 && r <= 1 ? Math.floor(Math.min(stated * RETRY_SPREAD, room - stated) * r) : 0);
+        this.log(
+          `recording ${body.action_id} (${tool}) answered ${failure}: retry ${attempt} of ${this.maxRetries} in ${waitMs} ms`,
+        );
+        await this.sleep(waitMs);
+      }
     } catch (e) {
       if (controller.signal.aborted) throw new Error(`timeout after ${this.timeoutMs}ms`);
       throw e;

@@ -32,6 +32,8 @@ import {
   summarizeVerification,
   DEFAULT_INTERVAL_MS,
   DEFAULT_TIMEOUT_MS,
+  INLINE_RETRY,
+  NO_RETRY,
   fetchVerification,
 } from "./common.js";
 
@@ -122,6 +124,11 @@ export function recordStepId(stepId: string): string {
  *
  * The action id is `inngest:<runId>:<name>` unless `action_id` is given, so the record is idempotent across
  * retries of the record step and the API updates one action instead of creating two.
+ *
+ * A record the API refuses with 429 or 503 and `Retry-After` is sent again by the SDK inside the record step,
+ * twice at most and after at most two seconds each (`maxRetries`, `maxRetryWaitMs`). With `failOpen` Inngest
+ * never retries the record step, because its result is memoised whether or not the record was made; without it
+ * Inngest retries the step after its own backoff, and the short retry here usually spares that.
  */
 export async function recordedStep<T>(
   step: StepLike,
@@ -133,7 +140,7 @@ export async function recordedStep<T>(
   const body = buildInngestAction(name, options);
   await step.run(recordStepId(name), async (): Promise<RecordStepResult> => {
     try {
-      const recorded = await sendAction(resolveClient(options), body);
+      const recorded = await sendAction(resolveClient(options, INLINE_RETRY), body);
       options.onRecorded?.(recorded, body);
       return { recorded: true, action_id: body.action_id };
     } catch (e) {
@@ -175,7 +182,8 @@ export async function waitForVerdict(step: StepLike, actionRef: string, options:
   let client: ActionClient | undefined;
   for (let i = 0; ; i++) {
     const raw = (await step.run(`${prefix}:poll:${i}`, () =>
-      fetchVerification((client ??= resolveClient(options)), actionRef, options.holdMs ?? intervalMs),
+      // No SDK retry on a poll: a poll that fails is a step that throws, and Inngest retries the step.
+      fetchVerification((client ??= resolveClient(options, NO_RETRY)), actionRef, options.holdMs ?? intervalMs),
     )) as Json;
     const verdict = summarizeVerification(raw);
     if (verdict.settled) return verdict;

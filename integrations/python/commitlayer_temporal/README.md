@@ -121,6 +121,17 @@ happened. With `fail_open=False` the interceptor raises `ApplicationError(type="
 non_retryable=True)` *before* the activity runs, so the activity fails without retrying and the workflow sees
 the failure. Nothing in the log line carries the API key.
 
+A busy API is not a recording failure yet. When it answers `429` or `503` with `Retry-After` the client waits
+the stated time and sends the same body again, three times at most (see
+[When the API is busy](../README.md#when-the-api-is-busy)); the fail-open policy applies to the last answer.
+The interceptor records in the event loop's executor, so the wait never blocks the worker's loop, but the
+activity's own code starts after it: with the defaults that is at most 30 seconds of waiting, and nine while the
+API states one second. Leave that room in `start_to_close_timeout` and, when the activity heartbeats, in
+`heartbeat_timeout` too: Temporal counts it from the start of the attempt, and no heartbeat is sent while the
+interceptor waits. Or give the interceptor a client with a smaller bound,
+`Client(max_retries=1, max_retry_wait=2.0)`. Every attempt carries the same `action_id`
+(`temporal:{workflow_id}:{activity_id}` by default), as does Temporal's own retry of the activity.
+
 ## 2. Gate completion on the verdict: the verifier
 
 Recording does not verify, and a verification is provisional until its settlement window closes and every
@@ -219,7 +230,9 @@ sets `activity_id="refund"` knows the action reference without passing anything 
 `action_id` template over the arguments (`"refund:{subject_id}"`) and build the same string in the workflow.
 
 The verifier activity is synchronous because the SDK's transport is `urllib`; register an `activity_executor`
-on the worker. It heartbeats after every poll with `{status, outcome, policy}`. Cancellation reaches it as
+on the worker. It heartbeats after every poll with `{status, outcome, policy}`. A poll the API refuses with
+`Retry-After` is retried by the client before the heartbeat, so keep `heartbeat_timeout` above `poll_seconds` plus
+the client's bound (nine seconds of waiting while the API states one second, 30 at the defaults' worst). Cancellation reaches it as
 Temporal's `CancelledError` in its thread; between polls it also checks `activity.is_cancelled()`.
 
 ## Testing without a server

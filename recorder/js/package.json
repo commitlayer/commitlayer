@@ -1,6 +1,6 @@
 {
   "name": "@commitlayer/mcp-recorder",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "CommitLayer MCP Recorder: a stdio proxy that records an MCP tool call as a CommitLayer action before forwarding it to the downstream server",
   "license": "MIT",
   "type": "module",
