@@ -1,16 +1,24 @@
 {
   "name": "commitlayer",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "CommitLayer JavaScript SDK: record agent actions, push facts, read verdicts, draft contracts",
   "license": "MIT",
   "type": "module",
-  "main": "dist/index.js",
+  "main": "dist/cjs/index.js",
+  "module": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
-    }
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/cjs/index.d.ts",
+        "default": "./dist/cjs/index.js"
+      }
+    },
+    "./package.json": "./package.json"
   },
   "files": [
     "dist",
@@ -21,8 +29,8 @@
     "node": ">=20"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "test": "tsc -p tsconfig.test.json && node --test dist-test/test/*.test.js"
+    "build": "node scripts/version.mjs && tsc -p tsconfig.json && tsc -p tsconfig.cjs.json && node scripts/cjs-package.mjs",
+    "test": "node scripts/version.mjs && tsc -p tsconfig.test.json && node --test dist-test/test/*.test.js"
   },
   "devDependencies": {
     "@types/node": "^22.20.5",

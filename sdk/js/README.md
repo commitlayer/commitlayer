@@ -4,19 +4,50 @@ Record agent actions, push facts from systems of record, read verdicts and draft
 dependencies; Node 20+ (uses the global `fetch` and `crypto`). Ships with TypeScript types.
 
 ```bash
-npm install commitlayer
-export COMMITLAYER_API_KEY=spk_...          # the agent runtime's key: a *recorder* key (records actions, nothing else)
-export COMMITLAYER_EVIDENCE_KEY=spk_...     # the pipeline's key: an *evidence* key bound to the sources it pushes for
-# COMMITLAYER_API_URL defaults to https://api.commitlayer.ai. One credential per side of the line: the key that
-# records an action can never also supply the facts that verify it.
+npm install commitlayer@0.1.5
 ```
+
+**ESM and CommonJS.** `import { recorder } from "commitlayer"` and `const { recorder } = require("commitlayer")` both
+work, with types for each. Supported: Node 20 and 22 (the versions CI tests). `VERSION` is generated from
+package.json at build time, so it is always the installed version.
+
+Two processes, two environment files, one key each (the in-product quickstart generates both):
+
+| Variable | `commitlayer-recorder.env` (the agent's runtime) | `commitlayer-evidence.env` (the evidence backend) |
+|---|---|---|
+| `COMMITLAYER_API_URL` | yes | yes |
+| `COMMITLAYER_WORKSPACE_ID` | yes | yes |
+| `COMMITLAYER_CONTRACT_ID` | yes | yes |
+| `COMMITLAYER_RECORDER_KEY` | yes | **never** |
+| `COMMITLAYER_EVIDENCE_KEY` | **never** | yes |
+
+`recorder()` reads the first file's names and `evidence()` the second's. `new Client()` with no key takes whichever
+of the two keys the process has and refuses a process that has both. `COMMITLAYER_API_KEY` (before 0.1.5) still
+works and warns that it is deprecated. `COMMITLAYER_API_URL` defaults to https://api.commitlayer.ai.
+
+## Publish evidence with source checkpoints
+
+```js
+import { evidence } from "commitlayer";
+
+const ev = evidence(); // COMMITLAYER_EVIDENCE_KEY from commitlayer-evidence.env
+const now = new Date();
+await ev.pushFacts([], { links: [{ subject_id: "pay_1001", source: "stripe", linked_subject_id: "ord_1001", linked_source: "shopify", link_type: "payment_to_order" }] });
+const result = await ev.publishBatch({
+  facts: [{ source: "stripe", subject_id: "pay_1001", subject_kind: "payment", fact_type: "refund", occurred_at: "2026-11-18T10:42:09Z", attributes: { amount: 40, currency: "usd" } }],
+  observedThrough: { stripe: now, shopify: now, zendesk: now }, // every source scanned, even with nothing new
+});
+console.log(result.reverify_scheduled);
+```
+
+`POST /v1/evidence/batch` refuses a recorder key (403).
 
 ## Record an action where it happens
 
 ```js
-import { Client } from "commitlayer";
+import { recorder } from "commitlayer";
 
-const cl = new Client({ agentId: "support-bot" });
+const cl = recorder({ agentId: "support-bot" }); // COMMITLAYER_RECORDER_KEY, COMMITLAYER_CONTRACT_ID
 
 const refund = cl.action("refund_workflow", {
   subject: (orderId) => orderId,
