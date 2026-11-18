@@ -1,0 +1,137 @@
+name: api-release-merge
+
+# An api-release pull request merges itself once its checks pass: CI is the review, as for the knowledge sync in
+# cl-repository-svcs. Only a pull request that api-release.yml opened qualifies: branch api-release/<version> in this
+# repository, label api-release, authored by the GitHub App, and its head commit carrying both a green CI run and
+# the green commit status api-release/live-contract that api-release.yml set after the live check. Anything a
+# person opens or pushes to (a new head commit has no live-contract status) still waits for a person.
+#
+# Runs after every completed ci run (workflow_run, so this file is always read from the default branch, never from
+# the pull request). A red CI run on an api-release pull request leaves it open and is upserted to the Board.
+on:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: api-release-merge-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: false
+
+jobs:
+  merge:
+    if: >-
+      github.event.workflow_run.event == 'pull_request' &&
+      startsWith(github.event.workflow_run.head_branch, 'api-release/') &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      statuses: read # the api-release/live-contract status, read with GITHUB_TOKEN
+    env:
+      BRANCH: ${{ github.event.workflow_run.head_branch }}
+      HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+      CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+      CI_URL: ${{ github.event.workflow_run.html_url }}
+      BOARD_API_URL: ${{ secrets.BOARD_API_URL }}
+      BOARD_PRODUCT_TOKEN: ${{ secrets.BOARD_PRODUCT_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Token for merging
+        id: app
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ vars.CLIENTS_DISPATCH_APP_ID }}
+          private-key: ${{ secrets.CLIENTS_DISPATCH_APP_PRIVATE_KEY }}
+
+      - name: The pull request, if it qualifies
+        id: pr
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          GH_REPO: ${{ github.repository }}
+          BOT: ${{ steps.app.outputs.app-slug }}
+          STATUS_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version="${BRANCH#api-release/}"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]] || { echo "not an api-release branch: $BRANCH"; exit 0; }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          pr=$(gh pr list --state open --head "$BRANCH" --limit 1 --json number,author,labels,headRefOid,isCrossRepository \
+            --jq ".[] | select(.isCrossRepository | not)
+                      | select(.author.login == \"app/$BOT\" or .author.login == \"${BOT}[bot]\")
+                      | select([.labels[].name] | index(\"api-release\"))
+                      | select(.headRefOid == \"$HEAD_SHA\") | .number")
+          if [ -z "$pr" ]; then
+            echo "No open api-release pull request from the App on $BRANCH at ${HEAD_SHA:0:7}; nothing to do." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "number=$pr" >> "$GITHUB_OUTPUT"
+          echo "url=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/pull/$pr" >> "$GITHUB_OUTPUT"
+          live=$(GH_TOKEN="$STATUS_TOKEN" gh api "repos/$GITHUB_REPOSITORY/commits/$HEAD_SHA/status" \
+            --jq '[.statuses[] | select(.context == "api-release/live-contract")][0].state // "missing"')
+          echo "live=$live" >> "$GITHUB_OUTPUT"
+
+      - name: Hold it (CI failed)
+        if: steps.pr.outputs.number != '' && env.CONCLUSION != 'success'
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          GH_REPO: ${{ github.repository }}
+          PR: ${{ steps.pr.outputs.number }}
+        run: |
+          gh pr comment "$PR" --body "CI concluded \`$CONCLUSION\` on ${HEAD_SHA:0:7} ($CI_URL), so this pull request does not merge itself. Fix it on this branch; the next green CI run with a green \`api-release/live-contract\` status merges it." || true
+          echo "::error::CI $CONCLUSION on #$PR; held"
+          exit 1
+
+      - name: Hold it (no green live contract check on this commit)
+        if: steps.pr.outputs.number != '' && env.CONCLUSION == 'success' && steps.pr.outputs.live != 'success'
+        run: |
+          echo "::error::#${{ steps.pr.outputs.number }}: api-release/live-contract is ${{ steps.pr.outputs.live }} on ${HEAD_SHA:0:7}; held for a person"
+          exit 1
+
+      # Auto-merge with the App's token, so the merge commit's push runs publish.yml (a push made with
+      # GITHUB_TOKEN starts no workflows). With no required checks on main GitHub refuses auto-merge on a pull
+      # request that can merge now; it is merged directly then. --match-head-commit: never a commit other than
+      # the one CI and the live check passed.
+      - name: Merge (squash)
+        if: steps.pr.outputs.number != '' && env.CONCLUSION == 'success' && steps.pr.outputs.live == 'success'
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          GH_REPO: ${{ github.repository }}
+          PR: ${{ steps.pr.outputs.number }}
+        run: |
+          set -euo pipefail
+          gh pr ready "$PR" >/dev/null 2>&1 || true
+          if gh pr merge "$PR" --auto --squash --delete-branch --match-head-commit "$HEAD_SHA"; then
+            echo "Auto-merge (squash) enabled on #$PR." >> "$GITHUB_STEP_SUMMARY"
+          else
+            gh pr merge "$PR" --squash --delete-branch --match-head-commit "$HEAD_SHA"
+            echo "#$PR merged (squash)." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Board (merged)
+        if: success() && steps.pr.outputs.number != ''
+        env:
+          VERSION: ${{ steps.pr.outputs.version }}
+          PR_URL: ${{ steps.pr.outputs.url }}
+        run: |
+          python scripts/board_report.py --stage merge --state success --version "$VERSION" \
+            --title "client update merged" --details "CI and the live contract check passed; the pull request merges itself and publish.yml publishes the new versions." \
+            --link "Pull request=$PR_URL" --link "CI run=$CI_URL"
+
+      - name: Board (held)
+        if: failure() && steps.pr.outputs.number != ''
+        env:
+          VERSION: ${{ steps.pr.outputs.version }}
+          PR_URL: ${{ steps.pr.outputs.url }}
+          LIVE: ${{ steps.pr.outputs.live }}
+        run: |
+          python scripts/board_report.py --stage merge --state failure --version "$VERSION" \
+            --title "client update held: CI $CONCLUSION, live contract check $LIVE" --failing-step "ci ($CONCLUSION) / api-release/live-contract ($LIVE)" \
+            --details "The pull request stays open and will not merge itself. Fix it on its branch: a green CI run and a green live contract status merge it." \
+            --link "Pull request=$PR_URL" --link "CI run=$CI_URL"
