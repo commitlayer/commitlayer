@@ -9,5 +9,7 @@ Issues and pull requests are welcome. Before opening a pull request:
 - Never put a real API key, trace id or customer identifier in code, tests or fixtures.
 - A pull request that adds a package or changes a public interface also updates that package's README; the
   READMEs are rendered on commitlayer.ai/docs.
+- A pull request that adds or changes an API call updates `scripts/api_surface.py`; its tests fail until the
+  inventory and the code agree. The release pipeline relies on it.
 
-Releases are cut by the maintainers from tags; see the README.
+Releases follow the package versions and are automated; see [RELEASING.md](RELEASING.md).

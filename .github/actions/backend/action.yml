@@ -1,0 +1,64 @@
+name: CommitLayer API at two commits
+description: >-
+  Check out the private backend (kobikwelu/stateprf-svcs) at the release commit (.backend/new) and the previous
+  release's commit (.backend/old, a worktree of the same clone), and install the new one into .backend/new/.venv.
+  The token comes from the GitHub App that sent the dispatch, installed on the backend with Contents: read only.
+
+inputs:
+  app-id:
+    description: vars.CLIENTS_DISPATCH_APP_ID
+    required: true
+  private-key:
+    description: secrets.CLIENTS_DISPATCH_APP_PRIVATE_KEY
+    required: true
+  repository:
+    description: The backend repository (validated by the caller)
+    required: true
+  source-commit:
+    description: The release commit, a full SHA
+    required: true
+  previous-commit:
+    description: The previous release's commit, a full SHA
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Token for the backend (read-only)
+      id: app
+      uses: actions/create-github-app-token@v1
+      with:
+        app-id: ${{ inputs.app-id }}
+        private-key: ${{ inputs.private-key }}
+        owner: kobikwelu
+        repositories: stateprf-svcs
+
+    # Full history: the previous release's commit must be reachable for the worktree and the diff.
+    - name: Check out the backend at the release commit
+      uses: actions/checkout@v4
+      with:
+        repository: ${{ inputs.repository }}
+        ref: ${{ inputs.source-commit }}
+        token: ${{ steps.app.outputs.token }}
+        path: .backend/new
+        fetch-depth: 0
+        persist-credentials: false
+
+    - name: The previous release's commit beside it; neither is part of this repository's changes
+      shell: bash
+      env:
+        PREVIOUS_COMMIT: ${{ inputs.previous-commit }}
+      run: |
+        set -euo pipefail
+        git -C .backend/new worktree add --detach ../old "$PREVIOUS_COMMIT"
+        printf '%s\n' '.backend/' '.pipeline/' >> .git/info/exclude
+
+    - uses: astral-sh/setup-uv@v3
+    - uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+
+    - name: Install the backend from the release commit
+      shell: bash
+      working-directory: .backend/new
+      run: uv venv -q --python 3.12 && uv pip install -q --python .venv/bin/python -e .

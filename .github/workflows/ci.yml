@@ -39,3 +39,23 @@ jobs:
       # The integrations are tested against this checkout's SDK, not the published one, so a change to both is
       # tested together (the install is not saved: package.json and the lock stay as committed).
       - run: for d in sdk/js recorder/js integrations/js; do (cd $d && npm ci && { [ $d != integrations/js ] || npm install --no-save ../../sdk/js; } && npm run build && npm test); done
+
+  # The release pipeline's own scripts (RELEASING.md): the API surface inventory and the checks that keep it honest
+  # against the code in both languages, the compatibility classifier, the publish plan, the guard and the Board
+  # report. The live suites in tests/live skip here; api-release.yml runs them against a real API.
+  release-scripts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: Python
+        run: |
+          python -m pip install -q pytest
+          python -m pytest -q scripts/tests tests/live
+      - name: TypeScript surface, against the built packages
+        run: |
+          for d in sdk/js recorder/js integrations/js; do (cd $d && npm ci && { [ $d != integrations/js ] || npm install --no-save ../../sdk/js; } && npm run build); done
+          node --test scripts/tests/surface.test.mjs tests/live/live.test.mjs

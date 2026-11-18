@@ -50,10 +50,12 @@ this repository needs one: the tests use a fake transport.
 
 ## Releases
 
-A release is a tag, `<package>-v<version>`, whose version equals the one in the package's `pyproject.toml` or
-`package.json`: `sdk-python-v0.1.1`, `recorder-python-v0.1.1`, `integrations-python-v0.1.1`, `sdk-js-v0.1.1`,
-`recorder-js-v0.1.1`, `integrations-js-v0.1.1`. The publish workflow runs the tests, builds, and publishes through
-Trusted Publishing on PyPI and npm with provenance. No registry token exists anywhere.
+Releases follow the versions, not tags. Every push to `main` publishes each package whose `pyproject.toml` or
+`package.json` version is not yet on PyPI or npm, through Trusted Publishing on PyPI and npm with provenance, and
+tags it `<package>-v<version>`; no registry token exists anywhere. Each CommitLayer API release also starts an
+automated check of what the packages use, and, when they must follow the API, an update that is tested against the
+real API and merged on green CI. [RELEASING.md](RELEASING.md) describes the whole flow, the one-time setup, how
+to run a stage again and how to publish by hand (a tag `<package>-v<version>` still works).
 
 ## Security
 

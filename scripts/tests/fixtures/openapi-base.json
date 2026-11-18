@@ -1,0 +1,1113 @@
+{
+  "components": {
+    "schemas": {
+      "ActionIn": {
+        "properties": {
+          "action_id": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Action Id"
+          },
+          "action_type": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Action Type"
+          },
+          "agent_id": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Id"
+          },
+          "channel": {
+            "anyOf": [
+              {
+                "maxLength": 40,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Channel"
+          },
+          "compensates": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Compensates"
+          },
+          "contract_id": {
+            "maxLength": 20000,
+            "title": "Contract Id",
+            "type": "string"
+          },
+          "contract_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Contract Version"
+          },
+          "environment": {
+            "anyOf": [
+              {
+                "enum": [
+                  "production",
+                  "test"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Environment"
+          },
+          "params": {
+            "additionalProperties": true,
+            "propertyNames": {
+              "maxLength": 20000
+            },
+            "title": "Params",
+            "type": "object"
+          },
+          "requested_at": {
+            "anyOf": [
+              {
+                "maxLength": 20000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requested At"
+          },
+          "subject_id": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Subject Id",
+            "type": "string"
+          },
+          "subject_kind": {
+            "anyOf": [
+              {
+                "maxLength": 40,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subject Kind"
+          },
+          "workflow_id": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workflow Id"
+          }
+        },
+        "required": [
+          "contract_id",
+          "subject_id"
+        ],
+        "title": "ActionIn",
+        "type": "object"
+      },
+      "ConfigureIn": {
+        "properties": {
+          "configuration": {
+            "additionalProperties": {
+              "additionalProperties": true,
+              "propertyNames": {
+                "maxLength": 20000
+              },
+              "type": "object"
+            },
+            "propertyNames": {
+              "maxLength": 20000
+            },
+            "title": "Configuration",
+            "type": "object"
+          },
+          "workflow": {
+            "anyOf": [
+              {
+                "maxLength": 20000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workflow"
+          }
+        },
+        "title": "ConfigureIn",
+        "type": "object"
+      },
+      "DraftIn": {
+        "properties": {
+          "action_type": {
+            "anyOf": [
+              {
+                "maxLength": 20000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Action Type"
+          },
+          "contract_id": {
+            "anyOf": [
+              {
+                "maxLength": 20000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Contract Id"
+          },
+          "lookahead": {
+            "default": "24h",
+            "maxLength": 20000,
+            "title": "Lookahead",
+            "type": "string"
+          },
+          "lookback_days": {
+            "default": 30,
+            "title": "Lookback Days",
+            "type": "integer"
+          },
+          "min_share": {
+            "default": 0.8,
+            "title": "Min Share",
+            "type": "number"
+          }
+        },
+        "title": "DraftIn",
+        "type": "object"
+      },
+      "FactIn": {
+        "properties": {
+          "attributes": {
+            "additionalProperties": true,
+            "propertyNames": {
+              "maxLength": 20000
+            },
+            "title": "Attributes",
+            "type": "object"
+          },
+          "fact_type": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Fact Type",
+            "type": "string"
+          },
+          "occurred_at": {
+            "maxLength": 20000,
+            "title": "Occurred At",
+            "type": "string"
+          },
+          "raw_ref": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Raw Ref"
+          },
+          "source": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Source",
+            "type": "string"
+          },
+          "subject_id": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Subject Id",
+            "type": "string"
+          },
+          "subject_kind": {
+            "anyOf": [
+              {
+                "maxLength": 40,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subject Kind"
+          }
+        },
+        "required": [
+          "source",
+          "subject_id",
+          "fact_type",
+          "occurred_at"
+        ],
+        "title": "FactIn",
+        "type": "object"
+      },
+      "FactsIn": {
+        "properties": {
+          "facts": {
+            "items": {
+              "$ref": "#/components/schemas/FactIn"
+            },
+            "maxItems": 1000,
+            "title": "Facts",
+            "type": "array"
+          },
+          "links": {
+            "items": {
+              "$ref": "#/components/schemas/LinkIn"
+            },
+            "maxItems": 1000,
+            "title": "Links",
+            "type": "array"
+          },
+          "watermarks": {
+            "additionalProperties": {
+              "maxLength": 20000,
+              "type": "string"
+            },
+            "propertyNames": {
+              "maxLength": 20000
+            },
+            "title": "Watermarks",
+            "type": "object"
+          }
+        },
+        "title": "FactsIn",
+        "type": "object"
+      },
+      "InstallIn": {
+        "properties": {
+          "configuration": {
+            "additionalProperties": {
+              "additionalProperties": true,
+              "propertyNames": {
+                "maxLength": 20000
+              },
+              "type": "object"
+            },
+            "propertyNames": {
+              "maxLength": 20000
+            },
+            "title": "Configuration",
+            "type": "object"
+          },
+          "confirm": {
+            "default": false,
+            "title": "Confirm",
+            "type": "boolean"
+          },
+          "workflow": {
+            "anyOf": [
+              {
+                "maxLength": 20000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workflow"
+          }
+        },
+        "title": "InstallIn",
+        "type": "object"
+      },
+      "Lens": {
+        "properties": {
+          "reason_codes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "reason_labels": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "verdict": {
+            "enum": [
+              "PASS",
+              "FAIL",
+              "UNKNOWN"
+            ],
+            "type": "string"
+          },
+          "verdict_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "LinkIn": {
+        "description": "Two record ids that are the same case: a ticket and the order it is about. Effects on either count for both.",
+        "properties": {
+          "link_type": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Link Type"
+          },
+          "linked_source": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Linked Source"
+          },
+          "linked_subject_id": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Linked Subject Id",
+            "type": "string"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          },
+          "subject_id": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Subject Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "subject_id",
+          "linked_subject_id"
+        ],
+        "title": "LinkIn",
+        "type": "object"
+      },
+      "Verification": {
+        "properties": {
+          "action": {
+            "properties": {
+              "action_id": {
+                "type": "string"
+              },
+              "contract_id": {
+                "type": "string"
+              },
+              "contract_version": {
+                "type": "integer"
+              },
+              "latest": {
+                "anyOf": [
+                  {
+                    "properties": {
+                      "outcome": {
+                        "type": "string"
+                      },
+                      "policy": {
+                        "type": "string"
+                      },
+                      "settles_at": {
+                        "type": "string"
+                      },
+                      "status": {
+                        "type": "string"
+                      }
+                    },
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "type": "object"
+          },
+          "contract": {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "version": {
+                "type": "integer"
+              }
+            },
+            "type": "object"
+          },
+          "lenses": {
+            "properties": {
+              "outcome": {
+                "$ref": "#/components/schemas/Lens"
+              },
+              "policy": {
+                "$ref": "#/components/schemas/Lens"
+              }
+            },
+            "type": "object"
+          },
+          "settles_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "settled"
+            ],
+            "type": "string"
+          },
+          "summary": {
+            "properties": {
+              "headline": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "timed_out": {
+            "type": "boolean"
+          }
+        },
+        "title": "Verification",
+        "type": "object"
+      },
+      "VerifyIn": {
+        "properties": {
+          "action": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ActionIn"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "action_id": {
+            "anyOf": [
+              {
+                "maxLength": 20000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Action Id"
+          },
+          "dry_run": {
+            "default": false,
+            "title": "Dry Run",
+            "type": "boolean"
+          },
+          "facts": {
+            "items": {
+              "$ref": "#/components/schemas/FactIn"
+            },
+            "maxItems": 1000,
+            "title": "Facts",
+            "type": "array"
+          },
+          "links": {
+            "items": {
+              "$ref": "#/components/schemas/LinkIn"
+            },
+            "maxItems": 1000,
+            "title": "Links",
+            "type": "array"
+          }
+        },
+        "title": "VerifyIn",
+        "type": "object"
+      },
+      "YamlIn": {
+        "properties": {
+          "yaml": {
+            "maxLength": 131072,
+            "title": "Yaml",
+            "type": "string"
+          }
+        },
+        "required": [
+          "yaml"
+        ],
+        "title": "YamlIn",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "title": "CommitLayer API (fixture)",
+    "version": "unversioned"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/v1/actions": {
+      "post": {
+        "operationId": "create_action_v1_actions_post",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ActionIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object"
+                }
+              }
+            },
+            "description": "ok"
+          }
+        }
+      }
+    },
+    "/v1/actions/verify": {
+      "post": {
+        "operationId": "verify_v1_actions_verify_post",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VerifyIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object"
+                }
+              }
+            },
+            "description": "ok"
+          }
+        }
+      }
+    },
+    "/v1/actions/{action_ref}": {
+      "get": {
+        "operationId": "get_action_v1_actions__action_ref__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "action_ref",
+            "required": true,
+            "schema": {
+              "title": "Action Ref",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Verification"
+                }
+              }
+            },
+            "description": "ok"
+          }
+        }
+      }
+    },
+    "/v1/actions/{action_ref}/wait": {
+      "get": {
+        "operationId": "wait_for_settlement_v1_actions__action_ref__wait_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "action_ref",
+            "required": true,
+            "schema": {
+              "title": "Action Ref",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "timeout",
+            "required": false,
+            "schema": {
+              "default": 30.0,
+              "title": "Timeout",
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Verification"
+                }
+              }
+            },
+            "description": "ok"
+          }
+        }
+      }
+    },
+    "/v1/contracts": {
+      "post": {
+        "operationId": "create_version_v1_contracts_post",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/YamlIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object"
+                }
+              }
+            },
+            "description": "ok"
+          }
+        }
+      }
+    },
+    "/v1/contracts/draft": {
+      "post": {
+        "operationId": "draft_v1_contracts_draft_post",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DraftIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object"
+                }
+              }
+            },
+            "description": "ok"
+          }
+        }
+      }
+    },
+    "/v1/contracts/validate": {
+      "post": {
+        "operationId": "validate_v1_contracts_validate_post",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/YamlIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object"
+                }
+              }
+            },
+            "description": "ok"
+          }
+        }
+      }
+    },
+    "/v1/facts": {
+      "post": {
+        "operationId": "push_facts_v1_facts_post",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FactsIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object"
+                }
+              }
+            },
+            "description": "ok"
+          }
+        }
+      }
+    },
+    "/v1/onboarding/sample": {
+      "post": {
+        "operationId": "sample",
+        "responses": {
+          "200": {
+            "description": "ok"
+          }
+        }
+      }
+    },
+    "/v1/packs": {
+      "get": {
+        "operationId": "list_packs_v1_packs_get",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object"
+                }
+              }
+            },
+            "description": "ok"
+          }
+        }
+      }
+    },
+    "/v1/packs/{pack_id}": {
+      "get": {
+        "operationId": "get_pack_v1_packs__pack_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pack_id",
+            "required": true,
+            "schema": {
+              "title": "Pack Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object"
+                }
+              }
+            },
+            "description": "ok"
+          }
+        }
+      }
+    },
+    "/v1/packs/{pack_id}/configure": {
+      "post": {
+        "operationId": "configure_v1_packs__pack_id__configure_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pack_id",
+            "required": true,
+            "schema": {
+              "title": "Pack Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfigureIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object"
+                }
+              }
+            },
+            "description": "ok"
+          }
+        }
+      }
+    },
+    "/v1/packs/{pack_id}/coverage": {
+      "get": {
+        "operationId": "pack_coverage_v1_packs__pack_id__coverage_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pack_id",
+            "required": true,
+            "schema": {
+              "title": "Pack Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object"
+                }
+              }
+            },
+            "description": "ok"
+          }
+        }
+      }
+    },
+    "/v1/packs/{pack_id}/dry-run": {
+      "post": {
+        "operationId": "dry_run_v1_packs__pack_id__dry_run_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pack_id",
+            "required": true,
+            "schema": {
+              "title": "Pack Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfigureIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object"
+                }
+              }
+            },
+            "description": "ok"
+          }
+        }
+      }
+    },
+    "/v1/packs/{pack_id}/install": {
+      "post": {
+        "operationId": "install_v1_packs__pack_id__install_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pack_id",
+            "required": true,
+            "schema": {
+              "title": "Pack Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InstallIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object"
+                }
+              }
+            },
+            "description": "ok"
+          }
+        }
+      }
+    },
+    "/v1/packs/{pack_id}/recorder-mapping": {
+      "get": {
+        "operationId": "pack_recorder_mapping_v1_packs__pack_id__recorder_mapping_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pack_id",
+            "required": true,
+            "schema": {
+              "title": "Pack Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "annotated",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Annotated",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object"
+                }
+              }
+            },
+            "description": "ok"
+          }
+        }
+      }
+    }
+  }
+}

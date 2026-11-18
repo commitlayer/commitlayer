@@ -1,0 +1,25 @@
+name: Client packages, installed and built
+description: >-
+  Install the three Python packages from this checkout (with pytest) and build the three TypeScript packages, the
+  integrations against this checkout's SDK, exactly as ci.yml does. The live smoke suites and the surface tests
+  run against what this leaves.
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 22
+    - name: Python packages
+      shell: bash
+      run: python -m pip install -q pytest ./sdk/python ./recorder/python './integrations/python[temporal,inngest]'
+    - name: TypeScript packages
+      shell: bash
+      run: |
+        set -euo pipefail
+        for d in sdk/js recorder/js integrations/js; do
+          (cd $d && npm ci --no-audit --no-fund && { [ $d != integrations/js ] || npm install --no-save --no-audit --no-fund ../../sdk/js; } && npm run build)
+        done

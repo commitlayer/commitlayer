@@ -1,18 +1,28 @@
-# Publish a client package to PyPI or npm from a release tag, with no long-lived registry secrets:
-# PyPI through Trusted Publishing (OIDC, with attestations) and npm through Trusted Publishing with provenance.
+# Publish the client packages to PyPI and npm, with no long-lived registry secrets: PyPI through Trusted Publishing
+# (OIDC, with attestations) and npm through Trusted Publishing with provenance.
 #
-# Tag format: <package>-v<version>, one tag per package, for example
-#   sdk-python-v0.1.1, recorder-python-v0.1.1, integrations-python-v0.1.1,
-#   sdk-js-v0.1.1, recorder-js-v0.1.1, integrations-js-v0.1.1
-# The tag's version must equal the version in the package's pyproject.toml / package.json, or the job fails.
+# Version-driven: on every push to main the plan job compares each package's manifest version (pyproject.toml,
+# package.json) with the registry (scripts/release_plan.py) and publishes exactly the ones not there yet. A
+# version already published is skipped, so a re-run, or a push that changes no version, publishes nothing. After a
+# publish the job verifies the version on the registry, and the tags job creates the git tag
+# <package>-v<version> for it. Nobody cuts tags.
+#
+# Order: the SDKs first; the recorders and integrations after them, and the integrations wait until the SDK
+# version in this commit can be downloaded (commitlayer-integrations requires commitlayer>=…). A failed SDK
+# publish stops its dependents. Any failure is upserted to the CommitLayer Board (scripts/board_report.py).
+#
+# Manual paths, as before: pushing a tag <package>-v<version> (its version must equal the manifest's) publishes
+# that package, and "Run workflow" publishes what is ahead, optionally only the packages named. RELEASING.md.
 #
 # One-time setup, per package: on pypi.org, the project's Publishing settings name this repository
 # (commitlayer/commitlayer), this workflow file (publish.yml) and the environment "release"; on npmjs.com, the
 # package's Trusted Publisher names the same three and has "Allow npm publish" ticked. The GitHub environment
-# "release" exists in this repository. After that, pushing a tag publishes.
+# "release" exists in this repository and its deployment branches and tags allow main and the tags above.
+# Keep this file's name and the environment's name: both are part of the registries' trust.
 name: publish
 on:
   push:
+    branches: [main]
     tags:
       - "sdk-python-v*"
       - "recorder-python-v*"
@@ -20,39 +30,72 @@ on:
       - "sdk-js-v*"
       - "recorder-js-v*"
       - "integrations-js-v*"
+  workflow_dispatch:
+    inputs:
+      packages:
+        description: Only these packages, comma-separated (e.g. sdk-js,integrations-js); empty for every package
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+# One publish at a time; a queued run plans again after the one before it, so it never publishes twice.
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+env:
+  BOARD_API_URL: ${{ secrets.BOARD_API_URL }}
+  BOARD_PRODUCT_TOKEN: ${{ secrets.BOARD_PRODUCT_TOKEN }}
 
 jobs:
-  resolve:
+  plan:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     outputs:
-      package: ${{ steps.parse.outputs.package }}
-      version: ${{ steps.parse.outputs.version }}
-      dir: ${{ steps.parse.outputs.dir }}
-      ecosystem: ${{ steps.parse.outputs.ecosystem }}
+      any: ${{ steps.plan.outputs.any }}
+      packages: ${{ steps.plan.outputs.packages }}
+      label: ${{ steps.label.outputs.label }}
+      publish_sdk_python: ${{ steps.plan.outputs.publish_sdk_python }}
+      publish_sdk_js: ${{ steps.plan.outputs.publish_sdk_js }}
+      publish_recorder_python: ${{ steps.plan.outputs.publish_recorder_python }}
+      publish_recorder_js: ${{ steps.plan.outputs.publish_recorder_js }}
+      publish_integrations_python: ${{ steps.plan.outputs.publish_integrations_python }}
+      publish_integrations_js: ${{ steps.plan.outputs.publish_integrations_js }}
+      version_sdk_python: ${{ steps.plan.outputs.version_sdk_python }}
+      version_sdk_js: ${{ steps.plan.outputs.version_sdk_js }}
     steps:
-      - id: parse
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: What is ahead of the registries
+        id: plan
+        env:
+          TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+          ONLY: ${{ inputs.packages }}
+        run: python scripts/release_plan.py plan --tag "$TAG" --only "$ONLY" --github-output "$GITHUB_OUTPUT" --summary "$GITHUB_STEP_SUMMARY"
+      # The Board groups a publish with the API release that caused it: the squash title of an api-release pull
+      # request names it ("API release 0.9.55: …"); anything else is labelled by commit or tag.
+      - name: Label for the Board
+        id: label
         run: |
-          tag="${GITHUB_REF_NAME}"
-          package="${tag%-v*}"
-          version="${tag##*-v}"
-          case "$package" in
-            sdk-python) dir=sdk/python; eco=pypi ;;
-            recorder-python) dir=recorder/python; eco=pypi ;;
-            integrations-python) dir=integrations/python; eco=pypi ;;
-            sdk-js) dir=sdk/js; eco=npm ;;
-            recorder-js) dir=recorder/js; eco=npm ;;
-            integrations-js) dir=integrations/js; eco=npm ;;
-            *) echo "unknown package in tag $tag"; exit 1 ;;
-          esac
-          echo "package=$package" >> "$GITHUB_OUTPUT"
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "dir=$dir" >> "$GITHUB_OUTPUT"
-          echo "ecosystem=$eco" >> "$GITHUB_OUTPUT"
+          subject=$(git log -1 --format=%s)
+          if [[ "$subject" =~ API\ release\ ([0-9]+\.[0-9]+\.[0-9]+[-+0-9A-Za-z.]*) ]]; then
+            echo "label=${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
+          elif [ "$GITHUB_REF_TYPE" = tag ]; then
+            echo "label=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
+          else
+            echo "label=main-${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
+          fi
 
-  pypi:
-    needs: resolve
-    if: needs.resolve.outputs.ecosystem == 'pypi'
+  # ---------------- the SDKs ----------------
+
+  sdk-python:
+    needs: plan
+    if: needs.plan.outputs.publish_sdk_python == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     environment: release
     permissions:
       id-token: write # Trusted Publishing
@@ -61,26 +104,24 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
-      - name: Version in pyproject.toml must match the tag
-        working-directory: ${{ needs.resolve.outputs.dir }}
-        run: |
-          v=$(python -c 'import tomllib;print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')
-          test "$v" = "${{ needs.resolve.outputs.version }}" || { echo "pyproject version $v != tag ${{ needs.resolve.outputs.version }}"; exit 1; }
       - name: Tests
         run: |
           python -m pip install -q pytest ./sdk/python ./recorder/python './integrations/python[temporal,inngest]'
-          python -m pytest -q integrations/python/tests recorder/python/tests
+          python -m pytest -q sdk/python/tests integrations/python/tests recorder/python/tests
       - name: Build
-        working-directory: ${{ needs.resolve.outputs.dir }}
+        working-directory: sdk/python
         run: python -m pip install -q build twine && python -m build && python -m twine check dist/*
       - uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          packages-dir: ${{ needs.resolve.outputs.dir }}/dist
+          packages-dir: sdk/python/dist
+      - name: Verify on PyPI
+        run: python scripts/release_plan.py wait --package sdk-python --timeout 600
 
-  npm:
-    needs: resolve
-    if: needs.resolve.outputs.ecosystem == 'npm'
+  sdk-js:
+    needs: plan
+    if: needs.plan.outputs.publish_sdk_js == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     environment: release
     permissions:
       id-token: write # Trusted Publishing with provenance
@@ -92,15 +133,205 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
       - run: npm install -g npm@latest
-      - name: Version in package.json must match the tag
-        working-directory: ${{ needs.resolve.outputs.dir }}
-        run: |
-          v=$(node -p "require('./package.json').version")
-          test "$v" = "${{ needs.resolve.outputs.version }}" || { echo "package.json version $v != tag ${{ needs.resolve.outputs.version }}"; exit 1; }
       - name: Build and test
-        working-directory: ${{ needs.resolve.outputs.dir }}
+        working-directory: sdk/js
         run: npm ci && npm run build && npm test
       - name: Publish
-        working-directory: ${{ needs.resolve.outputs.dir }}
+        working-directory: sdk/js
         run: npm publish --provenance --access public
+      - name: Verify on npm
+        run: python scripts/release_plan.py wait --package sdk-js --timeout 600
+
+  # ---------------- after the SDKs ----------------
+
+  recorder-python:
+    needs: [plan, sdk-python, sdk-js]
+    if: ${{ !cancelled() && !failure() && needs.plan.outputs.publish_recorder_python == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: release
+    permissions:
+      id-token: write # Trusted Publishing
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: Tests
+        run: |
+          python -m pip install -q pytest ./sdk/python ./recorder/python
+          python -m pytest -q recorder/python/tests
+      - name: Build
+        working-directory: recorder/python
+        run: python -m pip install -q build twine && python -m build && python -m twine check dist/*
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: recorder/python/dist
+      - name: Verify on PyPI
+        run: python scripts/release_plan.py wait --package recorder-python --timeout 600
+
+  recorder-js:
+    needs: [plan, sdk-python, sdk-js]
+    if: ${{ !cancelled() && !failure() && needs.plan.outputs.publish_recorder_js == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: release
+    permissions:
+      id-token: write # Trusted Publishing with provenance
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: npm install -g npm@latest
+      - name: Build and test
+        working-directory: recorder/js
+        run: npm ci && npm run build && npm test
+      - name: Publish
+        working-directory: recorder/js
+        run: npm publish --provenance --access public
+      - name: Verify on npm
+        run: python scripts/release_plan.py wait --package recorder-js --timeout 600
+
+  integrations-python:
+    needs: [plan, sdk-python, sdk-js]
+    if: ${{ !cancelled() && !failure() && needs.plan.outputs.publish_integrations_python == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: release
+    permissions:
+      id-token: write # Trusted Publishing
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      # commitlayer-integrations requires the SDK at this commit's version or later: never publish it before
+      # that SDK can be installed.
+      - name: Wait until commitlayer ${{ needs.plan.outputs.version_sdk_python }} is downloadable from PyPI
+        run: python scripts/release_plan.py wait --package sdk-python --timeout 900
+      - name: Tests
+        run: |
+          python -m pip install -q pytest ./sdk/python ./recorder/python './integrations/python[temporal,inngest]'
+          python -m pytest -q integrations/python/tests
+      - name: Build
+        working-directory: integrations/python
+        run: python -m pip install -q build twine && python -m build && python -m twine check dist/*
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: integrations/python/dist
+      - name: Verify on PyPI
+        run: python scripts/release_plan.py wait --package integrations-python --timeout 600
+
+  integrations-js:
+    needs: [plan, sdk-python, sdk-js]
+    if: ${{ !cancelled() && !failure() && needs.plan.outputs.publish_integrations_js == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: release
+    permissions:
+      id-token: write # Trusted Publishing with provenance
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: npm install -g npm@latest
+      - name: Wait until commitlayer ${{ needs.plan.outputs.version_sdk_js }} is downloadable from npm
+        run: python scripts/release_plan.py wait --package sdk-js --timeout 900
+      # Tested against the SDK from the registry, as its users install it (ci.yml tests it against this checkout).
+      - name: Build and test
+        working-directory: integrations/js
+        run: npm ci && npm run build && npm test
+      - name: Publish
+        working-directory: integrations/js
+        run: npm publish --provenance --access public
+      - name: Verify on npm
+        run: python scripts/release_plan.py wait --package integrations-js --timeout 600
+
+  # ---------------- tags and the Board ----------------
+
+  # The only job that may write to the repository, and it writes tags only: <package>-v<version> for each package
+  # this run published, after the version is verified on the registry. A tag pushed with GITHUB_TOKEN starts no
+  # workflow, and one that already exists (a manual tag) is left alone.
+  tags:
+    needs: [plan, sdk-python, sdk-js, recorder-python, recorder-js, integrations-python, integrations-js]
+    if: ${{ always() && needs.plan.outputs.any == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: Tag what was published
+        env:
+          RESULTS: >-
+            sdk-python=${{ needs.sdk-python.result }}
+            sdk-js=${{ needs.sdk-js.result }}
+            recorder-python=${{ needs.recorder-python.result }}
+            recorder-js=${{ needs.recorder-js.result }}
+            integrations-python=${{ needs.integrations-python.result }}
+            integrations-js=${{ needs.integrations-js.result }}
+        run: |
+          set -euo pipefail
+          git fetch --tags --quiet
+          for pair in $RESULTS; do
+            pkg="${pair%%=*}"; result="${pair#*=}"
+            [ "$result" = success ] || continue
+            version=$(python -c "import sys; sys.path.insert(0, 'scripts'); import release_plan as r; print(r.manifest_version('$pkg'))")
+            tag="$pkg-v$version"
+            python scripts/release_plan.py wait --package "$pkg" --version "$version" --timeout 120
+            if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+              echo "- $tag exists already" >> "$GITHUB_STEP_SUMMARY"; continue
+            fi
+            git tag "$tag" "$GITHUB_SHA"
+            git push origin "refs/tags/$tag"
+            echo "- tagged $tag" >> "$GITHUB_STEP_SUMMARY"
+          done
+
+  report:
+    needs: [plan, sdk-python, sdk-js, recorder-python, recorder-js, integrations-python, integrations-js, tags]
+    if: ${{ always() && (needs.plan.result == 'failure' || needs.plan.outputs.any == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: Board
+        env:
+          LABEL: ${{ needs.plan.outputs.label || format('main-{0}', github.sha) }}
+          PACKAGES: ${{ needs.plan.outputs.packages }}
+          RESULTS: >-
+            plan=${{ needs.plan.result }}
+            sdk-python=${{ needs.sdk-python.result }}
+            sdk-js=${{ needs.sdk-js.result }}
+            recorder-python=${{ needs.recorder-python.result }}
+            recorder-js=${{ needs.recorder-js.result }}
+            integrations-python=${{ needs.integrations-python.result }}
+            integrations-js=${{ needs.integrations-js.result }}
+            tags=${{ needs.tags.result }}
+        run: |
+          failed=""
+          for pair in $RESULTS; do
+            case "${pair#*=}" in failure|cancelled) failed="$failed ${pair%%=*}" ;; esac
+          done
+          if [ -n "$failed" ]; then
+            python scripts/board_report.py --stage publish --state failure --version "$LABEL" \
+              --title "publishing failed:$failed" --failing-step "publish:$failed" \
+              --details "Planned: $PACKAGES. A package whose job failed was not published (or not tagged); a dependent of a failed SDK was not attempted. Fix the cause and re-run the workflow: what is already published is skipped."
+          else
+            python scripts/board_report.py --stage publish --state success --version "$LABEL" \
+              --title "published $PACKAGES" --details "Every planned package is on its registry and tagged."
+          fi

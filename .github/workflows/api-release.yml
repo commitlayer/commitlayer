@@ -1,0 +1,421 @@
+name: api-release
+
+# Fired by the backend (kobikwelu/stateprf-svcs, .github/workflows/clients-dispatch.yml) when a release reaches its
+# production branch. Decides whether the client packages must follow the API, and if so has an agent change them
+# and opens a pull request that api-release-merge.yml merges once CI passes; publish.yml then publishes every
+# version that went up. A person is needed only when something fails, and every failure is upserted to the
+# CommitLayer Board (scripts/board_report.py). The whole flow is in RELEASING.md.
+#
+#   check    spec diff (scripts/api_compat.py) + live contract check against the API booted from the release
+#            commit. `none` and green: a summary, a Board note, done.
+#   update   otherwise: the agent edits the packages, with the compat report, the backend diff and a running API.
+#            No write token here; only the diff leaves the job.
+#   propose  applies the diff to a fresh checkout, runs the guard (scripts/release_guard.py, from an untouched
+#            copy), re-runs the live check on the changed packages, opens api-release/<version> with label
+#            api-release, and records the live result as the commit status api-release/live-contract.
+on:
+  repository_dispatch:
+    types: [commitlayer_api_release]
+  workflow_dispatch:
+    inputs:
+      release_version:
+        description: API release version, e.g. 0.9.55
+        required: true
+      source_commit:
+        description: Full 40-character backend commit of the release
+        required: true
+      previous_commit:
+        description: Full 40-character backend commit of the previous release
+        required: true
+      previous_version:
+        description: Previous API release version (optional, for the record)
+        required: false
+      force_update:
+        description: Run the agent even when the check finds nothing to change
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: api-release-${{ github.event.client_payload.release_version || inputs.release_version }}
+  cancel-in-progress: false
+
+env:
+  SOURCE_REPOSITORY: ${{ github.event.client_payload.source_repository || 'kobikwelu/stateprf-svcs' }}
+  RELEASE_VERSION: ${{ github.event.client_payload.release_version || inputs.release_version }}
+  PREVIOUS_VERSION: ${{ github.event.client_payload.previous_version || inputs.previous_version }}
+  SOURCE_COMMIT: ${{ github.event.client_payload.source_commit || inputs.source_commit }}
+  PREVIOUS_COMMIT: ${{ github.event.client_payload.previous_commit || inputs.previous_commit }}
+  BOARD_API_URL: ${{ secrets.BOARD_API_URL }}
+  BOARD_PRODUCT_TOKEN: ${{ secrets.BOARD_PRODUCT_TOKEN }}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      classification: ${{ steps.compat.outputs.classification }}
+      smoke_python: ${{ steps.smoke.outputs.python }}
+      smoke_js: ${{ steps.smoke.outputs.js }}
+      needs_update: ${{ steps.decide.outputs.needs_update }}
+    steps:
+      - name: Validate the dispatch payload
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_REPOSITORY" == "kobikwelu/stateprf-svcs" ]] || { echo "::error::repository not allowlisted"; exit 1; }
+          [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::source_commit must be a full SHA"; exit 1; }
+          [[ "$PREVIOUS_COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::previous_commit must be a full SHA"; exit 1; }
+          [[ "$RELEASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]] || { echo "::error::release_version must be x.y.z"; exit 1; }
+          [[ -z "$PREVIOUS_VERSION" || "$PREVIOUS_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]] || { echo "::error::bad previous_version"; exit 1; }
+
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/backend
+        with:
+          app-id: ${{ vars.CLIENTS_DISPATCH_APP_ID }}
+          private-key: ${{ secrets.CLIENTS_DISPATCH_APP_PRIVATE_KEY }}
+          repository: ${{ env.SOURCE_REPOSITORY }}
+          source-commit: ${{ env.SOURCE_COMMIT }}
+          previous-commit: ${{ env.PREVIOUS_COMMIT }}
+
+      - uses: ./.github/actions/clients-setup
+
+      # The committed product-catalog/openapi.json when the commit has one, else the app's own schema; the old
+      # commit is imported with the new commit's environment (dependencies rarely move between releases).
+      - name: Compare the API against what the packages use
+        id: compat
+        run: |
+          set -euo pipefail
+          mkdir -p build/api build/private
+          PY=.backend/new/.venv/bin/python
+          python scripts/export_openapi.py --backend .backend/new --python "$PY" --out build/private/openapi-new.json
+          python scripts/export_openapi.py --backend .backend/old --python "$PY" --out build/private/openapi-old.json
+          python scripts/api_compat.py --old build/private/openapi-old.json --new build/private/openapi-new.json \
+            --old-label "${PREVIOUS_VERSION:-${PREVIOUS_COMMIT:0:7}}" --new-label "$RELEASE_VERSION" \
+            --json build/api/compat.json --markdown build/api/compat.md
+          echo "classification=$(python -c 'import json;print(json.load(open("build/api/compat.json"))["classification"])')" >> "$GITHUB_OUTPUT"
+          cat build/api/compat.md >> "$GITHUB_STEP_SUMMARY"
+          python scripts/api_surface.py > build/api/surface.json
+
+      - name: Live contract check (the packages as they are, against the new API)
+        id: smoke
+        uses: ./.github/actions/live-smoke
+
+      - name: Decide
+        id: decide
+        env:
+          CLASSIFICATION: ${{ steps.compat.outputs.classification }}
+          SMOKE_PY: ${{ steps.smoke.outputs.python }}
+          SMOKE_JS: ${{ steps.smoke.outputs.js }}
+          BOOTED: ${{ steps.smoke.outputs.booted }}
+          FORCE: ${{ inputs.force_update || false }}
+        run: |
+          # An API that does not start is the backend's problem, not the clients': report it, change nothing.
+          [ "$BOOTED" = "true" ] || { echo "::error::the API from $SOURCE_COMMIT did not start"; exit 1; }
+          if [ "$CLASSIFICATION" != "none" ] || [ "$SMOKE_PY" != "passed" ] || [ "$SMOKE_JS" != "passed" ] || [ "$FORCE" = "true" ]; then
+            echo "needs_update=true" >> "$GITHUB_OUTPUT"
+            echo "**The packages need an update** (class \`$CLASSIFICATION\`, live Python $SMOKE_PY, TypeScript $SMOKE_JS)." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "needs_update=false" >> "$GITHUB_OUTPUT"
+            echo "**No client change needed for API $RELEASE_VERSION**: nothing the packages use changed, and every package passed the live check." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # Only build/api/ (the compat report and the client test logs) is uploaded: this repository is public and
+      # the backend is private, so its schema files, its diff and its server log stay in build/private/.
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: api-release-${{ env.RELEASE_VERSION }}
+          path: build/api/
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Board (no change needed)
+        if: steps.decide.outputs.needs_update == 'false'
+        run: |
+          python scripts/board_report.py --stage release --state success --version "$RELEASE_VERSION" \
+            --title "no client change needed" --summary-file build/api/compat.md \
+            --details "Nothing the client packages use changed between ${PREVIOUS_VERSION:-the previous release} and $RELEASE_VERSION, and the live contract check passed in Python and TypeScript."
+
+      - name: Board (failure)
+        if: failure()
+        run: |
+          python scripts/board_report.py --stage release --state failure --version "$RELEASE_VERSION" \
+            --title "the compatibility check could not run" --failing-step "api-release / check" \
+            --summary-file build/api/compat.md --logs-file build/private/backend.log \
+            --details "The pipeline could not decide whether the clients must change; nothing was updated or published."
+
+  update:
+    needs: check
+    if: needs.check.outputs.needs_update == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    # Read-only: the agent's edits leave this job only as a patch, which the propose job checks before using.
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/backend
+        with:
+          app-id: ${{ vars.CLIENTS_DISPATCH_APP_ID }}
+          private-key: ${{ secrets.CLIENTS_DISPATCH_APP_PRIVATE_KEY }}
+          repository: ${{ env.SOURCE_REPOSITORY }}
+          source-commit: ${{ env.SOURCE_COMMIT }}
+          previous-commit: ${{ env.PREVIOUS_COMMIT }}
+
+      - uses: ./.github/actions/clients-setup
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: api-release-${{ env.RELEASE_VERSION }}
+          path: build/api
+
+      - name: The backend's own diff, for the agent (kept out of every artifact)
+        run: |
+          mkdir -p build/api
+          git -C .backend/new diff "$PREVIOUS_COMMIT" "$SOURCE_COMMIT" -- app/api app/models app/models.py app/schemas \
+            docs/API.md product-catalog/openapi.json CHANGELOG.md | head -c 600000 > build/api/backend.diff || true
+
+      - name: A running API from the release commit, for the agent's own checks
+        uses: ./.github/actions/live-smoke
+        with:
+          keep-running: "true"
+          label: "-before-agent"
+
+      - name: Prompt
+        id: prompt
+        env:
+          CLASSIFICATION: ${{ needs.check.outputs.classification }}
+          SMOKE_PYTHON: ${{ needs.check.outputs.smoke_python }}
+          SMOKE_JS: ${{ needs.check.outputs.smoke_js }}
+        run: |
+          python - <<'PY' > build/prompt.md
+          import os, pathlib
+          text = pathlib.Path(".github/prompts/api-release.md").read_text(encoding="utf-8")
+          for key in ("RELEASE_VERSION", "PREVIOUS_VERSION", "SOURCE_COMMIT", "PREVIOUS_COMMIT", "SOURCE_REPOSITORY",
+                      "CLASSIFICATION", "SMOKE_PYTHON", "SMOKE_JS"):
+              text = text.replace("{{" + key + "}}", os.environ.get(key) or "unknown")
+          print(text)
+          PY
+          {
+            echo "text<<PROMPT_EOF_$GITHUB_RUN_ID"
+            cat build/prompt.md
+            echo "PROMPT_EOF_$GITHUB_RUN_ID"
+          } >> "$GITHUB_OUTPUT"
+
+      # No model is named here: the action's default applies. Tools are limited to reading and editing files and to
+      # the test and build commands the prompt lists; nothing that reaches the network but the local API and npm.
+      - name: Update the packages
+        id: agent
+        uses: anthropics/claude-code-action@8d70a0dd265122bd65b8e09d3d959e65373ae2a1 # v1.0.260
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ github.token }}
+          prompt: ${{ steps.prompt.outputs.text }}
+          claude_args: >-
+            --max-turns 120
+            --allowedTools "Read,Edit,Write,Glob,Grep,Bash(python -m pytest:*),Bash(node --test:*),Bash(npm run build:*),Bash(npm test:*),Bash(npm run test:*),Bash(git diff:*),Bash(git status:*),Bash(ls:*),Bash(cat:*),Bash(set -a:*),Bash(cd:*)"
+            --disallowedTools "WebFetch,WebSearch"
+
+      - name: The agent's change, as a patch
+        if: always()
+        env:
+          EXECUTION_FILE: ${{ steps.agent.outputs.execution_file }}
+        run: |
+          set -euo pipefail
+          python scripts/boot_backend.py stop --env-file build/live.env || true
+          rm -f build/live.env
+          mkdir -p build/agent
+          git add -A
+          git diff --cached --binary HEAD > build/agent/change.patch
+          git diff --cached --stat HEAD | tee build/agent/stat.txt
+          python - <<'PY'
+          import json, os, pathlib
+          out = pathlib.Path("build/agent/summary.md")
+          text = ""
+          try:
+              messages = json.loads(pathlib.Path(os.environ.get("EXECUTION_FILE") or "missing").read_text())
+              results = [m for m in messages if isinstance(m, dict) and m.get("type") == "result"]
+              text = (results[-1].get("result") or "") if results else ""
+          except (OSError, ValueError):
+              pass
+          out.write_text(text.strip() or "(the agent left no summary)", encoding="utf-8")
+          PY
+          cat build/agent/summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: api-release-${{ env.RELEASE_VERSION }}-change
+          path: build/agent/
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Board (failure)
+        if: failure()
+        run: |
+          python scripts/board_report.py --stage agent --state failure --version "$RELEASE_VERSION" \
+            --title "the update agent did not finish" --failing-step "api-release / update" \
+            --summary-file build/api/compat.md \
+            --details "The API change needs the client packages to follow, and the agent run failed or timed out. No pull request was opened."
+
+  propose:
+    needs: [check, update]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      statuses: write # the api-release/live-contract status on the pull request's head commit
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      # An untouched copy of this commit: the guard and the reporting run from here, never from the patched tree.
+      - uses: actions/checkout@v4
+        with:
+          path: .pipeline
+          persist-credentials: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: api-release-${{ env.RELEASE_VERSION }}
+          path: build/api
+      - uses: actions/download-artifact@v4
+        with:
+          name: api-release-${{ env.RELEASE_VERSION }}-change
+          path: build/agent
+
+      - name: Apply the agent's change
+        run: |
+          set -euo pipefail
+          printf '%s\n' '.backend/' '.pipeline/' >> .git/info/exclude
+          if [ -s build/agent/change.patch ]; then git apply --index build/agent/change.patch; fi
+
+      - name: Guard
+        id: guard
+        run: |
+          set +e
+          python .pipeline/scripts/release_guard.py --repo . --base HEAD --summary build/agent/guard.md
+          code=$?
+          cat build/agent/guard.md >> "$GITHUB_STEP_SUMMARY"
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          exit $code
+
+      - uses: ./.pipeline/.github/actions/backend
+        with:
+          app-id: ${{ vars.CLIENTS_DISPATCH_APP_ID }}
+          private-key: ${{ secrets.CLIENTS_DISPATCH_APP_PRIVATE_KEY }}
+          repository: ${{ env.SOURCE_REPOSITORY }}
+          source-commit: ${{ env.SOURCE_COMMIT }}
+          previous-commit: ${{ env.PREVIOUS_COMMIT }}
+
+      - uses: ./.pipeline/.github/actions/clients-setup
+
+      - name: Live contract check (the changed packages, against the new API)
+        id: smoke
+        uses: ./.pipeline/.github/actions/live-smoke
+        with:
+          label: "-after-agent"
+
+      - name: Pull request body
+        env:
+          SMOKE_PY: ${{ steps.smoke.outputs.python }}
+          SMOKE_JS: ${{ steps.smoke.outputs.js }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          {
+            echo "Automated update of the client packages for CommitLayer API **$RELEASE_VERSION** (previous: ${PREVIOUS_VERSION:-unknown}; backend \`${PREVIOUS_COMMIT:0:7}..${SOURCE_COMMIT:0:7}\`)."
+            echo
+            echo "It merges itself (squash) once CI passes and the commit status \`api-release/live-contract\` is green; publish.yml then publishes every package whose version went up. See RELEASING.md."
+            echo
+            echo "Live contract check after the change: Python **$SMOKE_PY**, TypeScript **$SMOKE_JS**."
+            echo
+            cat build/agent/guard.md
+            echo
+            cat build/api/compat.md
+            echo
+            echo "## The agent's summary"
+            echo
+            head -c 30000 build/agent/summary.md
+            echo
+            echo
+            echo "Run: $RUN_URL"
+          } > build/agent/pr-body.md
+
+      # The pull request is opened with the App's token, so CI runs on it (a pull request opened with GITHUB_TOKEN
+      # starts no workflows) and api-release-merge.yml can recognise it by its author.
+      - name: Token for opening the pull request
+        id: app
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ vars.CLIENTS_DISPATCH_APP_ID }}
+          private-key: ${{ secrets.CLIENTS_DISPATCH_APP_PRIVATE_KEY }}
+
+      - name: Open or update the pull request
+        id: pr
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ steps.app.outputs.token }}
+          branch: api-release/${{ env.RELEASE_VERSION }}
+          base: main
+          title: "API release ${{ env.RELEASE_VERSION }}: update the client packages"
+          body-path: build/agent/pr-body.md
+          commit-message: "Follow API release ${{ env.RELEASE_VERSION }}"
+          labels: api-release
+          delete-branch: true
+
+      - name: Record the live contract check on the pull request's commit
+        if: steps.pr.outputs.pull-request-head-sha != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.pr.outputs.pull-request-head-sha }}
+          OK: ${{ steps.smoke.outputs.python == 'passed' && steps.smoke.outputs.js == 'passed' }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/statuses/$SHA" -f context=api-release/live-contract \
+            -f state="$([ "$OK" = true ] && echo success || echo failure)" -f target_url="$RUN_URL" \
+            -f description="Live smoke against API $RELEASE_VERSION: $([ "$OK" = true ] && echo passed || echo failed)"
+
+      - name: Hold the pull request if the live check failed
+        if: steps.smoke.outputs.python != 'passed' || steps.smoke.outputs.js != 'passed'
+        run: |
+          echo "::error::the changed packages fail the live contract check against API $RELEASE_VERSION; #${{ steps.pr.outputs.pull-request-number }} stays open for a person"
+          exit 1
+
+      - name: Board (pull request opened)
+        env:
+          PR_URL: ${{ steps.pr.outputs.pull-request-url }}
+          PR_NUMBER: ${{ steps.pr.outputs.pull-request-number }}
+        run: |
+          python .pipeline/scripts/board_report.py --stage release --state success --version "$RELEASE_VERSION" \
+            --title "client update proposed in #$PR_NUMBER" --summary-file build/api/compat.md \
+            --details "The packages were updated for API $RELEASE_VERSION and pass the live contract check; #$PR_NUMBER merges itself when CI passes." \
+            --link "Pull request=$PR_URL"
+
+      - name: Board (failure)
+        if: failure()
+        env:
+          GUARD: ${{ steps.guard.outputs.code }}
+          PR_URL: ${{ steps.pr.outputs.pull-request-url }}
+        run: |
+          if [ "$GUARD" = "3" ]; then
+            stage=agent; title="the agent made no change where one was needed"
+            details="The compatibility check or the live check said the packages must change, and the agent left no change. No pull request was opened."
+          elif [ -n "$GUARD" ] && [ "$GUARD" != "0" ]; then
+            stage=agent; title="the agent's change was refused by the guard"
+            details="$(tr '\n' ' ' < build/agent/guard.md)"
+          elif [ -z "$GUARD" ]; then
+            stage=agent; title="the agent's change could not be applied"
+            details="The patch from the update job did not apply to a fresh checkout. No pull request was opened."
+          else
+            stage=release; title="the updated packages fail the live contract check"
+            details="The pull request stays open and will not merge itself until a person fixes it."
+          fi
+          python .pipeline/scripts/board_report.py --stage "$stage" --state failure --version "$RELEASE_VERSION" \
+            --title "$title" --failing-step "api-release / propose" --summary-file build/api/compat.md \
+            --logs-file build/api/live-python-after-agent.log --details "$details" --link "Pull request=$PR_URL"

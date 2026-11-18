@@ -1,0 +1,61 @@
+name: Live contract check
+description: >-
+  Boot the API from .backend/new (scripts/boot_backend.py: SQLite, development login, a throwaway workspace and
+  key), run tests/live in Python and in TypeScript against it, and stop it. Never fails the step: the outcomes are
+  outputs (`passed` or `failed`), the test logs are in build/api/ (the server's own log in build/private/, never
+  uploaded: this repository is public and the backend is not), and the caller decides. Leaves build/live.env (the
+  throwaway key) only when keep-running is true.
+
+inputs:
+  keep-running:
+    description: Leave the API running for later steps (stop it with scripts/boot_backend.py stop)
+    default: "false"
+  label:
+    description: Suffix for the log files
+    default: ""
+
+outputs:
+  booted:
+    description: true when the API started and was provisioned
+    value: ${{ steps.run.outputs.booted }}
+  python:
+    description: passed | failed
+    value: ${{ steps.run.outputs.python }}
+  js:
+    description: passed | failed
+    value: ${{ steps.run.outputs.js }}
+
+runs:
+  using: composite
+  steps:
+    - id: run
+      shell: bash
+      env:
+        KEEP: ${{ inputs.keep-running }}
+        LABEL: ${{ inputs.label }}
+      run: |
+        set -uo pipefail
+        mkdir -p build/api build/private
+        if ! python scripts/boot_backend.py start --backend .backend/new --python .backend/new/.venv/bin/python \
+             --env-file build/live.env --log "build/private/backend$LABEL.log"; then
+          echo "::error::the API from the release commit did not start (its log is in build/private/, reported to the Board)"
+          { echo "booted=false"; echo "python=failed"; echo "js=failed"; } >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        echo "booted=true" >> "$GITHUB_OUTPUT"
+        set -a; . build/live.env; set +a
+        python -m pytest -q -p no:cacheprovider tests/live 2>&1 | tee "build/api/live-python$LABEL.log"
+        py=${PIPESTATUS[0]}
+        node --test tests/live/live.test.mjs 2>&1 | tee "build/api/live-js$LABEL.log"
+        js=${PIPESTATUS[0]}
+        echo "python=$([ "$py" = 0 ] && echo passed || echo failed)" >> "$GITHUB_OUTPUT"
+        echo "js=$([ "$js" = 0 ] && echo passed || echo failed)" >> "$GITHUB_OUTPUT"
+        {
+          echo "### Live contract check$LABEL"
+          echo "- Python: $([ "$py" = 0 ] && echo passed || echo '**failed**')"
+          echo "- TypeScript: $([ "$js" = 0 ] && echo passed || echo '**failed**')"
+        } >> "$GITHUB_STEP_SUMMARY"
+        if [ "$KEEP" != "true" ]; then
+          python scripts/boot_backend.py stop --env-file build/live.env
+          rm -f build/live.env
+        fi
