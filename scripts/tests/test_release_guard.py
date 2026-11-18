@@ -58,6 +58,17 @@ def bump(repo: Path, package: str, to: str) -> None:
         f.write_text(re.sub(r'"version": "[^"]+"', f'"version": "{to}"', f.read_text(), count=1))
 
 
+def current(repo: Path, package: str) -> str:
+    """The version the fixture's manifest carries now (the repository's own), so these tests survive a release."""
+    p = rg.PACKAGES[package]
+    if p.ecosystem == "pypi":
+        m = re.search(r'(?m)^version = "([^"]+)"$', (repo / p.directory / "pyproject.toml").read_text())
+    else:
+        m = re.search(r'"version": "([^"]+)"', (repo / p.directory / "package.json").read_text())
+    assert m is not None
+    return m.group(1)
+
+
 def run(repo: Path):
     _git(repo, "add", "-A")
     return rg.check(repo, "HEAD")
@@ -70,11 +81,12 @@ def test_no_change_is_its_own_exit_code(repo):
 
 def test_a_proper_release_change_passes(repo):
     (repo / "sdk/python/README.md").write_text("readme with the new call\n")
+    old = current(repo, "sdk-python")
     bump(repo, "sdk-python", "0.2.0")
     (repo / "scripts/api_surface.py").write_text("USES = ('new',)\n")
     (repo / "sdk/js/tests/t.txt").write_text("only a test changed: no release needed\n")
     code, problems, notes = run(repo)
-    assert (code, problems) == (0, []) and notes == ["sdk-python: 0.1.3 → 0.2.0"]
+    assert (code, problems) == (0, []) and notes == [f"sdk-python: {old} → 0.2.0"]
 
 
 @pytest.mark.parametrize(
@@ -110,7 +122,7 @@ def test_deleting_a_workflow_is_refused(repo):
 )
 def test_secret_shaped_additions_are_refused(repo, line):
     (repo / "sdk/python/README.md").write_text(line + "\n")
-    bump(repo, "sdk-python", "0.1.4")
+    bump(repo, "sdk-python", "9.9.9")
     code, problems, _ = run(repo)
     assert code == rg.EXIT_REFUSED and any("secret" in p for p in problems)
 
@@ -138,9 +150,10 @@ def test_a_version_that_goes_down_is_refused(repo):
 
 
 def test_cli_writes_the_summary(repo, tmp_path):
-    bump(repo, "sdk-js", "0.1.5")
+    old = current(repo, "sdk-js")
+    bump(repo, "sdk-js", "9.9.9")
     (repo / "sdk/js/README.md").write_text("x\n")
     _git(repo, "add", "-A")
     out = tmp_path / "guard.md"
     assert rg.main(["--repo", str(repo), "--base", "HEAD", "--summary", str(out)]) == 0
-    assert out.read_text().startswith("## Release guard: passed") and "sdk-js: 0.1.4 → 0.1.5" in out.read_text()
+    assert out.read_text().startswith("## Release guard: passed") and f"sdk-js: {old} → 9.9.9" in out.read_text()

@@ -47,11 +47,13 @@ async function exercise(full) {
       workflowId: "w", agentId: "a", channel: "api", compensates: "o", contractVersion: 2,
     });
     await client.pushFacts([{ source: "x" }], { links: [{ a: 1 }], watermarks: { x: "t" } });
+    await client.publishBatch({ facts: [{ source: "x" }], observedThrough: { x: "t" } });
     await client.verify({ actionId: "i", action: { action_id: "j" }, facts: [{ source: "x" }], links: [{ a: 1 }], dryRun: true });
     await client.packs.dryRun("p", { w: {} }, { workflow: "w" });
   } else {
     await client.recordAction("c", "s");
     await client.pushFacts([]);
+    await client.publishBatch({ observedThrough: { x: "t" } });
     await client.verify();
     await client.packs.dryRun("p");
   }

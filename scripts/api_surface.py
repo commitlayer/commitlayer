@@ -172,6 +172,16 @@ def _sdk(package: str) -> list[Use]:
             ("facts",),
             sdk=("push_facts", "pushFacts"),
         ),
+        # 0.1.4 (Python) / 0.1.5 (TypeScript): the evidence batch with source checkpoints.
+        Use(
+            package,
+            "publish_batch",
+            "POST",
+            "/v1/evidence/batch",
+            ("facts", "observed_through"),
+            ("facts", "observed_through"),
+            sdk=("publish_batch", "publishBatch"),
+        ),
         Use(
             package,
             "verify",

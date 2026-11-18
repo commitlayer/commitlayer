@@ -113,11 +113,13 @@ def _sdk_calls(full: bool) -> list[tuple[str, str, dict[str, Any] | None]]:
             contract_version=2,
         )
         c.push_facts([{"source": "x"}], links=[{"a": 1}], watermarks={"x": "2026-01-01T00:00:00Z"})
+        c.publish_batch(facts=[{"source": "x"}], observed_through={"x": "2026-01-01T00:00:00Z"})
         c.verify("i", action={"action_id": "j"}, facts=[{"source": "x"}], links=[{"a": 1}], dry_run=True)
         c.packs.dry_run("p", {"w": {}}, workflow="w")
     else:
         c.record_action("c", "s")
         c.push_facts([])
+        c.publish_batch(observed_through={"x": "2026-01-01T00:00:00Z"})
         c.verify()
         c.packs.dry_run("p")
     c.get_action("i")
