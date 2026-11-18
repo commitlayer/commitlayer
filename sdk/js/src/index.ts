@@ -3,9 +3,13 @@
  *
  * Zero dependencies; uses the global `fetch` (Node 18+ or a browser). One client per workspace API key:
  *
- *     import { Client } from "commitlayer";
+ *     import { recorder, evidence } from "commitlayer";   // or: const { recorder } = require("commitlayer")
  *
- *     const cl = new Client({ apiKey: "spk_..." }); // COMMITLAYER_API_KEY / COMMITLAYER_API_URL are read when omitted
+ *     const cl = recorder(); // COMMITLAYER_RECORDER_KEY, COMMITLAYER_API_URL, COMMITLAYER_CONTRACT_ID
+ *     const ev = evidence(); // COMMITLAYER_EVIDENCE_KEY, COMMITLAYER_API_URL
+ *
+ * `new Client()` with no key takes whichever of the two keys the process has and refuses a process that has both.
+ * `COMMITLAYER_API_KEY` still works as a deprecated fallback. ESM and CommonJS builds; Node 20 or later.
  *
  *     const refund = cl.action("refund_workflow", {
  *       subject: (orderId) => orderId,
@@ -26,7 +30,23 @@
  * other answer is retried, and neither is a network error or a timeout.
  */
 
-export const VERSION = "0.1.4"; // kept equal to package.json; the tests check it
+import { VERSION } from "./version.js";
+
+/** The package's version, generated from package.json at build time (scripts/version.mjs). */
+export { VERSION };
+
+/** The canonical environment names: the in-product quickstart's commitlayer-recorder.env and commitlayer-evidence.env. */
+export const ENV = {
+  apiUrl: "COMMITLAYER_API_URL",
+  workspaceId: "COMMITLAYER_WORKSPACE_ID",
+  contractId: "COMMITLAYER_CONTRACT_ID",
+  recorderKey: "COMMITLAYER_RECORDER_KEY",
+  evidenceKey: "COMMITLAYER_EVIDENCE_KEY",
+  /** Deprecated since 0.1.5: one generic key name for both processes. Still read, with a warning. */
+  legacyKey: "COMMITLAYER_API_KEY",
+} as const;
+
+export type ClientRole = "recorder" | "evidence";
 
 export type Json = Record<string, unknown>;
 
@@ -71,6 +91,12 @@ export interface RetryInfo {
 export interface ClientOptions {
   apiKey?: string;
   apiUrl?: string;
+  /** Which process this client is: its key is read from COMMITLAYER_RECORDER_KEY or COMMITLAYER_EVIDENCE_KEY. */
+  role?: ClientRole;
+  /** Default COMMITLAYER_WORKSPACE_ID. */
+  workspaceId?: string;
+  /** The contract `recordAction` uses when it is given none; default COMMITLAYER_CONTRACT_ID. */
+  contractId?: string;
   /** Per attempt; default 20 seconds. The wait before a retry is not counted against it. */
   timeoutMs?: number;
   transport?: Transport;
@@ -337,9 +363,50 @@ function apiError(status: number, json: unknown, retry: { retryAfterMs?: number;
   return new CommitLayerError(status, "error", JSON.stringify(json).slice(0, 300), undefined, retry);
 }
 
+let legacyWarned = false;
+
+/** The key this process's environment holds for the role (see `ENV`). */
+function keyFromEnv(role: ClientRole | undefined): string {
+  const rec = env(ENV.recorderKey) || "";
+  const ev = env(ENV.evidenceKey) || "";
+  if (role === "recorder" && rec) return rec;
+  if (role === "evidence" && ev) return ev;
+  if (role === undefined) {
+    if (rec && ev) {
+      throw new Error(
+        `Both ${ENV.recorderKey} and ${ENV.evidenceKey} are set in this process. Keep them in separate processes, or say which one this client is: recorder() or evidence().`,
+      );
+    }
+    if (rec || ev) return rec || ev;
+  }
+  const legacy = env(ENV.legacyKey) || "";
+  if (legacy && !legacyWarned) {
+    legacyWarned = true;
+    const wanted = role === "evidence" ? ENV.evidenceKey : ENV.recorderKey;
+    const p = (globalThis as { process?: { emitWarning?: (m: string, t: string) => void } }).process;
+    p?.emitWarning?.(`${ENV.legacyKey} is deprecated; set ${wanted} (and keep the recorder and evidence keys in separate processes).`, "DeprecationWarning");
+  }
+  return legacy;
+}
+
+/** @internal for tests: warn again on the next deprecated read. */
+export function _resetDeprecationWarnings(): void {
+  legacyWarned = false;
+}
+
+export interface PublishBatchOptions {
+  /** The records found; may be empty (a checkpoint-only batch). Each is a `POST /v1/facts` item. */
+  facts?: Json[];
+  /** source to the time the backend scanned it through (RFC 3339 or a Date), for every source scanned. */
+  observedThrough: Record<string, string | Date>;
+}
+
 export class Client {
   readonly apiKey: string;
   readonly apiUrl: string;
+  readonly role: ClientRole | undefined;
+  readonly workspaceId: string | undefined;
+  readonly contractId: string | undefined;
   readonly timeoutMs: number;
   readonly agentId: string | undefined;
   /** Retries after the first attempt for a 429 or 503 answer that carries `Retry-After`; 0 is off. */
@@ -353,8 +420,14 @@ export class Client {
   private readonly now: () => number;
 
   constructor(options: ClientOptions = {}) {
-    this.apiKey = options.apiKey || env("COMMITLAYER_API_KEY") || "";
-    this.apiUrl = (options.apiUrl || env("COMMITLAYER_API_URL") || "https://api.commitlayer.ai").replace(/\/+$/, "");
+    if (options.role !== undefined && options.role !== "recorder" && options.role !== "evidence") {
+      throw new Error("role must be recorder or evidence");
+    }
+    this.role = options.role;
+    this.apiKey = options.apiKey || keyFromEnv(options.role);
+    this.apiUrl = (options.apiUrl || env(ENV.apiUrl) || "https://api.commitlayer.ai").replace(/\/+$/, "");
+    this.workspaceId = options.workspaceId || env(ENV.workspaceId) || undefined;
+    this.contractId = options.contractId || env(ENV.contractId) || undefined;
     this.timeoutMs = options.timeoutMs ?? 20_000;
     this.agentId = options.agentId;
     this.maxRetries = atLeastZero("maxRetries", options.maxRetries, 3);
@@ -365,7 +438,8 @@ export class Client {
     this.now = options.now ?? Date.now;
     this.transport = options.transport ?? ((m, p, b) => this.http(m, p, b));
     if (!this.apiKey && !options.transport) {
-      throw new Error("apiKey is required (or set COMMITLAYER_API_KEY)");
+      const names = options.role === "recorder" ? ENV.recorderKey : options.role === "evidence" ? ENV.evidenceKey : `${ENV.recorderKey} or ${ENV.evidenceKey}`;
+      throw new Error(`apiKey is required (or set ${names})`);
     }
   }
 
@@ -463,11 +537,14 @@ export class Client {
    * `POST /v1/actions`: record one action. Returns `{action, verification, allowance}`. The verification is
    * provisional until its settlement window closes and every source it reads has caught up.
    */
-  async recordAction(contractId: string, subjectId: string, opts: RecordActionOptions = {}): Promise<Json> {
+  async recordAction(contractId: string | null | undefined, subjectId: string, opts: RecordActionOptions = {}): Promise<Json> {
+    const contract = contractId || this.contractId;
+    if (!contract) throw new Error(`contractId is required (or set ${ENV.contractId})`);
+    if (subjectId == null || String(subjectId) === "") throw new Error("subjectId is required");
     // Built once, before the first attempt: a retry sends this body again, generated action_id and request time included.
     const body: Json = {
       action_id: opts.actionId || newActionId(),
-      contract_id: contractId,
+      contract_id: contract,
       subject_id: String(subjectId),
       params: opts.params ?? {},
       requested_at: opts.requestedAt || now(),
@@ -494,6 +571,21 @@ export class Client {
     if (opts.links?.length) body.links = opts.links;
     if (opts.watermarks && Object.keys(opts.watermarks).length) body.watermarks = opts.watermarks;
     return this.call("POST", "/v1/facts", body);
+  }
+
+  /**
+   * `POST /v1/evidence/batch`: the records a backend found and, for every source it scanned, the time it scanned
+   * through, including a source with no matching record (`facts` may be empty). Needs an evidence key; a recorder
+   * key is refused (403). Returns `{facts, checkpoints, affected_actions, reverify_scheduled, snapshot_versions}`.
+   * Links between records (a payment and its order) go through `pushFacts([], { links })` first.
+   */
+  async publishBatch(opts: PublishBatchOptions): Promise<Json> {
+    const through: Record<string, string> = {};
+    for (const [source, ts] of Object.entries(opts.observedThrough ?? {})) {
+      through[source] = ts instanceof Date ? ts.toISOString().replace(/\.\d{3}Z$/, "Z") : String(ts);
+    }
+    if (!Object.keys(through).length) throw new Error("observedThrough names at least one source and the time it was scanned through");
+    return this.call("POST", "/v1/evidence/batch", { facts: opts.facts ?? [], observed_through: through });
   }
 
   /**
@@ -676,4 +768,15 @@ export class Packs {
   recorderMapping(packId: string): Promise<Json> {
     return this.client.request("GET", `/v1/packs/${encodeURIComponent(packId)}/recorder-mapping`);
   }
+}
+
+/** A client for the agent's runtime: COMMITLAYER_RECORDER_KEY, COMMITLAYER_API_URL, COMMITLAYER_WORKSPACE_ID and
+ * COMMITLAYER_CONTRACT_ID from the environment (commitlayer-recorder.env). */
+export function recorder(options: Omit<ClientOptions, "role"> = {}): Client {
+  return new Client({ ...options, role: "recorder" });
+}
+
+/** A client for the evidence backend: COMMITLAYER_EVIDENCE_KEY and the shared names (commitlayer-evidence.env). */
+export function evidence(options: Omit<ClientOptions, "role"> = {}): Client {
+  return new Client({ ...options, role: "evidence" });
 }

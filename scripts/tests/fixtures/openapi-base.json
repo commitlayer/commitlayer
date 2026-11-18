@@ -230,6 +230,29 @@
         "title": "DraftIn",
         "type": "object"
       },
+      "EvidenceBatchIn": {
+        "properties": {
+          "facts": {
+            "items": {
+              "$ref": "#/components/schemas/FactIn"
+            },
+            "title": "Facts",
+            "type": "array"
+          },
+          "observed_through": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Observed Through",
+            "type": "object"
+          }
+        },
+        "required": [
+          "observed_through"
+        ],
+        "title": "EvidenceBatchIn",
+        "type": "object"
+      },
       "FactIn": {
         "properties": {
           "attributes": {
@@ -824,6 +847,35 @@
         },
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object"
+                }
+              }
+            },
+            "description": "ok"
+          }
+        }
+      }
+    },
+    "/v1/evidence/batch": {
+      "post": {
+        "operationId": "publish_evidence_batch_v1_evidence_batch_post",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EvidenceBatchIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
             "content": {
               "application/json": {
                 "schema": {
