@@ -4,19 +4,32 @@ Record agent actions, push facts from systems of record, read verdicts and draft
 only; Python 3.10+.
 
 ```bash
-pip install commitlayer
-export COMMITLAYER_API_KEY=spk_...          # the agent runtime's key: a *recorder* key (records actions, nothing else)
-export COMMITLAYER_EVIDENCE_KEY=spk_...     # the pipeline's key: an *evidence* key bound to the sources it pushes for
-# COMMITLAYER_API_URL defaults to https://api.commitlayer.ai. One credential per side of the line: the key that
-# records an action can never also supply the facts that verify it.
+pip install commitlayer==0.1.4
 ```
+
+Two processes, two environment files, one key each (the in-product quickstart generates both):
+
+| Variable | `commitlayer-recorder.env` (the agent's runtime) | `commitlayer-evidence.env` (the evidence backend) |
+|---|---|---|
+| `COMMITLAYER_API_URL` | yes | yes |
+| `COMMITLAYER_WORKSPACE_ID` | yes | yes |
+| `COMMITLAYER_CONTRACT_ID` | yes | yes |
+| `COMMITLAYER_RECORDER_KEY` | yes | **never** |
+| `COMMITLAYER_EVIDENCE_KEY` | **never** | yes |
+
+`commitlayer.recorder()` reads the first file's names, `commitlayer.evidence()` the second's. `Client()` with no key
+takes whichever of the two keys the process has and refuses a process that has both: the key that records an action
+can never also supply the facts that verify it. `COMMITLAYER_API_KEY` (before 0.1.4) still works and warns that it
+is deprecated. `COMMITLAYER_API_URL` defaults to https://api.commitlayer.ai.
+
+`commitlayer.__version__` is read from the installed package's metadata, so it is always the version pip installed.
 
 ## Record an action where it happens
 
 ```python
-from commitlayer import Client
+import commitlayer
 
-cl = Client(agent_id="support-bot")
+cl = commitlayer.recorder(agent_id="support-bot")
 
 
 @cl.action(
@@ -37,6 +50,33 @@ print(refund.last_recorded["verification"]["summary"]["headline"])
 The action is recorded **before** the function runs, so its request time precedes every effect. The function's
 return value is never changed and never consulted: verification reads the systems of record. If the API cannot
 be reached the function still runs and a warning is logged (`fail_open=True`); pass `fail_open=False` to raise.
+
+## Publish evidence with source checkpoints
+
+The evidence backend scans each system of record and publishes what it found **and how far it scanned**:
+`observed_through` names every source it scanned, including one with no matching record, so a verdict whose expected
+effect never happened settles FAIL at its deadline instead of waiting on the clock.
+
+```python
+from datetime import datetime, timezone
+
+import commitlayer
+
+ev = commitlayer.evidence()  # COMMITLAYER_EVIDENCE_KEY from commitlayer-evidence.env
+now = datetime.now(timezone.utc)
+ev.push_facts([], links=[{"subject_id": "pay_1001", "source": "stripe", "linked_subject_id": "ord_1001",
+                          "linked_source": "shopify", "link_type": "payment_to_order"}])
+result = ev.publish_batch(
+    facts=[
+        {"source": "stripe", "subject_id": "pay_1001", "subject_kind": "payment", "fact_type": "refund",
+         "occurred_at": "2026-11-18T10:42:09Z", "attributes": {"amount": 40.0, "currency": "usd"}},
+    ],
+    observed_through={"stripe": now, "shopify": now, "zendesk": now},
+)
+print(result["reverify_scheduled"], [c["accepted"] for c in result["checkpoints"]])
+```
+
+`POST /v1/evidence/batch` refuses a recorder key (403). Links between records go through `push_facts` first.
 
 ## Push facts, with a watermark
 

@@ -1,12 +1,19 @@
 """CommitLayer Python SDK: record agent actions, push facts, read verdicts, draft contracts.
 
-Standard library only. One client per workspace API key::
+Standard library only. One client per workspace API key, and one key per process: the agent's runtime records
+with the Runtime recorder key, the backend that publishes evidence uses the Evidence pipeline key::
 
-    from commitlayer import Client
+    import commitlayer
 
-    cl = Client(api_key="spk_...")  # COMMITLAYER_API_KEY / COMMITLAYER_API_URL are read when omitted
+    rec = commitlayer.recorder()  # COMMITLAYER_RECORDER_KEY, COMMITLAYER_API_URL, COMMITLAYER_CONTRACT_ID
+    ev = commitlayer.evidence()   # COMMITLAYER_EVIDENCE_KEY, COMMITLAYER_API_URL
 
-    @cl.action("refund_workflow", subject=lambda order_id, **_: order_id, params=lambda amount, **_: {"amount": amount})
+``Client()`` with no key reads ``COMMITLAYER_RECORDER_KEY`` or ``COMMITLAYER_EVIDENCE_KEY`` (whichever one the process
+has; both is refused, since the two must not share a process). ``COMMITLAYER_API_KEY`` still works as a deprecated
+fallback and warns once. ``COMMITLAYER_WORKSPACE_ID`` and ``COMMITLAYER_CONTRACT_ID`` are read too: the contract is
+the default for ``record_action``. The decorator form::
+
+    @rec.action("refund_workflow", subject=lambda order_id, **_: order_id, params=lambda amount, **_: {"amount": amount})
     def refund(order_id: str, amount: float) -> dict:
         ...  # the agent's own work, unchanged
 
@@ -38,13 +45,49 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+import warnings
 from collections.abc import Callable, Iterable, Mapping
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from typing import Any
 
-__all__ = ["Client", "CommitLayerError", "Packs", "__version__"]
-__version__ = "0.1.3"  # kept equal to pyproject.toml; tests check it
+__all__ = [
+    "API_URL_ENV",
+    "CONTRACT_ID_ENV",
+    "EVIDENCE_KEY_ENV",
+    "LEGACY_KEY_ENV",
+    "RECORDER_KEY_ENV",
+    "WORKSPACE_ID_ENV",
+    "Client",
+    "CommitLayerError",
+    "Packs",
+    "__version__",
+    "evidence",
+    "recorder",
+]
+
+
+def _package_version() -> str:
+    """The installed distribution's version, from its metadata: the one number, kept in pyproject.toml only."""
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        return version("commitlayer")
+    except PackageNotFoundError:  # imported from a source tree that was never installed
+        return "0.0.0+source"
+
+
+__version__ = _package_version()
+
+# The canonical environment names (the in-product quickstart's commitlayer-recorder.env and commitlayer-evidence.env).
+API_URL_ENV = "COMMITLAYER_API_URL"
+WORKSPACE_ID_ENV = "COMMITLAYER_WORKSPACE_ID"
+CONTRACT_ID_ENV = "COMMITLAYER_CONTRACT_ID"
+RECORDER_KEY_ENV = "COMMITLAYER_RECORDER_KEY"
+EVIDENCE_KEY_ENV = "COMMITLAYER_EVIDENCE_KEY"
+# Deprecated since 0.1.4: one generic key name for both processes. Still read, with a DeprecationWarning.
+LEGACY_KEY_ENV = "COMMITLAYER_API_KEY"
+ROLES = ("recorder", "evidence")
 
 log = logging.getLogger("commitlayer")
 
@@ -178,6 +221,9 @@ class Client:
         timeout: float = 20.0,
         transport: Transport | None = None,
         agent_id: str | None = None,
+        role: str | None = None,
+        workspace_id: str | None = None,
+        contract_id: str | None = None,
         max_retries: int = 3,
         max_retry_wait: float = 10.0,
         sleep: Callable[[float], None] = time.sleep,
@@ -192,10 +238,13 @@ class Client:
         clock."""
         if not (0 <= max_retries < math.inf and 0 <= max_retry_wait < math.inf):  # also false for NaN
             raise ValueError("max_retries and max_retry_wait must be numbers, zero or more")
-        self.api_key = api_key or os.environ.get("COMMITLAYER_API_KEY") or ""
-        self.api_url = (
-            api_url or os.environ.get("COMMITLAYER_API_URL") or "https://api.commitlayer.ai"
-        ).rstrip("/")
+        if role is not None and role not in ROLES:
+            raise ValueError(f"role must be one of {', '.join(ROLES)}")
+        self.role = role
+        self.api_key = api_key or _key_from_env(role)
+        self.api_url = (api_url or os.environ.get(API_URL_ENV) or "https://api.commitlayer.ai").rstrip("/")
+        self.workspace_id = workspace_id or os.environ.get(WORKSPACE_ID_ENV) or None
+        self.contract_id = contract_id or os.environ.get(CONTRACT_ID_ENV) or None
         self.timeout = timeout
         self.agent_id = agent_id
         self.max_retries = int(max_retries)
@@ -204,7 +253,10 @@ class Client:
         self._jitter = jitter
         self._transport = transport or self._http
         if not self.api_key and transport is None:
-            raise ValueError("api_key is required (or set COMMITLAYER_API_KEY)")
+            names = {"recorder": RECORDER_KEY_ENV, "evidence": EVIDENCE_KEY_ENV}.get(
+                role or "", f"{RECORDER_KEY_ENV} or {EVIDENCE_KEY_ENV}"
+            )
+            raise ValueError(f"api_key is required (or set {names})")
 
     # ---------------- transport ----------------
 
@@ -303,8 +355,8 @@ class Client:
 
     def record_action(
         self,
-        contract_id: str,
-        subject_id: str,
+        contract_id: str | None = None,
+        subject_id: str | None = None,
         *,
         params: dict[str, Any] | None = None,
         action_id: str | None = None,
@@ -320,6 +372,11 @@ class Client:
         """``POST /v1/actions``: record one action. ``compensates`` names an earlier action this one corrects;
         once this one settles PASS, that action is marked compensated (its own verdict never changes). Returns ``{action, verification, allowance}``. The verification
         is provisional until its settlement window closes and every source it reads has caught up."""
+        contract_id = contract_id or self.contract_id
+        if not contract_id:
+            raise ValueError(f"contract_id is required (or set {CONTRACT_ID_ENV})")
+        if subject_id is None or str(subject_id) == "":
+            raise ValueError("subject_id is required")
         body = {
             "action_id": action_id or f"act_{uuid.uuid4().hex}",
             "contract_id": contract_id,
@@ -355,6 +412,26 @@ class Client:
         if watermarks:
             body["watermarks"] = watermarks
         return self._call("POST", "/v1/facts", body)
+
+    def publish_batch(
+        self,
+        facts: list[dict[str, Any]] | None = None,
+        *,
+        observed_through: Mapping[str, str | datetime],
+    ) -> dict[str, Any]:
+        """``POST /v1/evidence/batch``: the records a source's backend found and, for every source it scanned, the
+        time it scanned through (``observed_through``: source → RFC 3339 time or an aware ``datetime``), including a
+        source with no matching record (``facts`` may be empty). That checkpoint is what lets a verdict settle at
+        its deadline without waiting on the clock. Needs an evidence key; a recorder key is refused (403).
+
+        Returns ``{facts, checkpoints, affected_actions, reverify_scheduled, snapshot_versions}``: one result per
+        record, each checkpoint ``{source, observed_through, accepted, reason?}``, the actions the evidence may
+        change and whether their verification was scheduled. Links between records (a payment and its order) go
+        through ``push_facts([], links=...)`` first."""
+        if not observed_through:
+            raise ValueError("observed_through names at least one source and the time it was scanned through")
+        through = {str(src): _rfc3339(ts) for src, ts in observed_through.items()}
+        return self._call("POST", "/v1/evidence/batch", {"facts": list(facts or []), "observed_through": through})
 
     def verify(
         self,
@@ -507,6 +584,59 @@ class Client:
             return wrapper
 
         return deco
+
+
+_WARNED: set[str] = set()
+
+
+def _key_from_env(role: str | None) -> str:
+    """The key this process's environment holds for the role: ``COMMITLAYER_RECORDER_KEY`` for a recorder,
+    ``COMMITLAYER_EVIDENCE_KEY`` for an evidence publisher, either one (never both) without a role, and the deprecated
+    ``COMMITLAYER_API_KEY`` when none of those is set."""
+    rec, ev = os.environ.get(RECORDER_KEY_ENV) or "", os.environ.get(EVIDENCE_KEY_ENV) or ""
+    if role == "recorder" and rec:
+        return rec
+    if role == "evidence" and ev:
+        return ev
+    if role is None:
+        if rec and ev:
+            raise ValueError(
+                f"Both {RECORDER_KEY_ENV} and {EVIDENCE_KEY_ENV} are set in this process. Keep them in separate "
+                "processes, or say which one this client is: commitlayer.recorder() or commitlayer.evidence()."
+            )
+        if rec or ev:
+            return rec or ev
+    legacy = os.environ.get(LEGACY_KEY_ENV) or ""
+    if legacy and LEGACY_KEY_ENV not in _WARNED:
+        _WARNED.add(LEGACY_KEY_ENV)
+        wanted = {"recorder": RECORDER_KEY_ENV, "evidence": EVIDENCE_KEY_ENV}.get(role or "", RECORDER_KEY_ENV)
+        warnings.warn(
+            f"{LEGACY_KEY_ENV} is deprecated; set {wanted} (and keep the recorder and evidence keys in separate "
+            "processes).",
+            DeprecationWarning,
+            stacklevel=4,
+        )
+    return legacy
+
+
+def recorder(**kwargs: Any) -> Client:
+    """A client for the agent's runtime: ``COMMITLAYER_RECORDER_KEY``, ``COMMITLAYER_API_URL``,
+    ``COMMITLAYER_WORKSPACE_ID`` and ``COMMITLAYER_CONTRACT_ID`` from the environment (``commitlayer-recorder.env``)."""
+    return Client(role="recorder", **kwargs)
+
+
+def evidence(**kwargs: Any) -> Client:
+    """A client for the backend that publishes evidence: ``COMMITLAYER_EVIDENCE_KEY``, ``COMMITLAYER_API_URL``,
+    ``COMMITLAYER_WORKSPACE_ID`` and ``COMMITLAYER_CONTRACT_ID`` from the environment (``commitlayer-evidence.env``)."""
+    return Client(role="evidence", **kwargs)
+
+
+def _rfc3339(ts: str | datetime) -> str:
+    if isinstance(ts, datetime):
+        if ts.tzinfo is None:
+            raise ValueError("observed_through times must be timezone-aware")
+        return ts.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    return str(ts)
 
 
 class Packs:
