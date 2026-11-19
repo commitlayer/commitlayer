@@ -15,11 +15,11 @@ Nothing here imports LangGraph or LangChain: the wrapper and the node are plain 
 those libraries call, so this module works with any version that keeps them, and can be unit-tested without
 either installed.
 
-    from commitlayer import Client
+    import commitlayer
     from commitlayer_langgraph import record_tool_calls, record_tool_calls_async
     from langgraph.prebuilt import ToolNode
 
-    recorder = ToolRecorder(Client(agent_id="support-bot"), MAPPING)
+    recorder = ToolRecorder(commitlayer.recorder(agent_id="support-bot"), MAPPING)
     tools = ToolNode(
         [refund_payment, close_ticket],
         wrap_tool_call=record_tool_calls(recorder),  # invoke, stream

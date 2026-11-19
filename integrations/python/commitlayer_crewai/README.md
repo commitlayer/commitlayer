@@ -4,15 +4,15 @@ Record a crew's tool calls as CommitLayer actions before the tools run.
 
 ```bash
 pip install 'commitlayer-integrations[crewai]'
-export COMMITLAYER_API_KEY=spk_...     # a recorder key
+export COMMITLAYER_RECORDER_KEY=spk_...  # a recorder key (COMMITLAYER_API_KEY still works, deprecated)
 ```
 
 ```python
-from commitlayer import Client
+import commitlayer
 from commitlayer_integrations.tools import ToolRecorder
 import commitlayer_crewai
 
-recorder = ToolRecorder(Client(agent_id="ops-crew"), MAPPING)  # MAPPING: tool name -> contract, subject, params
+recorder = ToolRecorder(commitlayer.recorder(agent_id="ops-crew"), MAPPING)  # MAPPING: tool name -> contract, subject, params
 commitlayer_crewai.install(recorder)  # registers a before_tool_call hook
 result = crew.kickoff()
 verdict = recorder.wait("refund:order_10231")  # the completion gate

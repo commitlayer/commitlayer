@@ -16,7 +16,8 @@ control the independent facts, the governing contract, or the final evidence.
 
 ```bash
 pip install 'commitlayer-integrations[inngest]'
-export COMMITLAYER_API_KEY=spk_...   # read by commitlayer.Client; never log or print it
+export COMMITLAYER_RECORDER_KEY=spk_...  # read by commitlayer.recorder(); never log or print it
+                                         # (COMMITLAYER_API_KEY still works, deprecated)
 ```
 
 The helpers are duck-typed over Inngest's `ctx` (`.step`, `.run_id`), so the package itself has no import of
@@ -26,11 +27,11 @@ The helpers are duck-typed over Inngest's `ctx` (`.step`, `.run_id`), so the pac
 
 ```python
 import inngest
-from commitlayer import Client
+import commitlayer
 from commitlayer_inngest import CommitLayerSteps
 
 inngest_client = inngest.Inngest(app_id="orders")
-cl = CommitLayerSteps(Client(), fn_id="order-refund", agent_id="refund-agent")  # fn_id -> workflow_id
+cl = CommitLayerSteps(commitlayer.recorder(), fn_id="order-refund", agent_id="refund-agent")  # fn_id -> workflow_id
 
 
 @inngest_client.create_function(

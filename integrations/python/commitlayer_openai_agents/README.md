@@ -4,16 +4,16 @@ Record function-tool calls as CommitLayer actions before they run.
 
 ```bash
 pip install 'commitlayer-integrations[openai-agents]'
-export COMMITLAYER_API_KEY=spk_...     # a recorder key
+export COMMITLAYER_RECORDER_KEY=spk_...  # a recorder key (COMMITLAYER_API_KEY still works, deprecated)
 ```
 
 ```python
 from agents import Agent, Runner, function_tool
-from commitlayer import Client
+import commitlayer
 from commitlayer_integrations.tools import ToolRecorder
 from commitlayer_openai_agents import CommitLayerHooks
 
-recorder = ToolRecorder(Client(agent_id="support-bot"), MAPPING)
+recorder = ToolRecorder(commitlayer.recorder(agent_id="support-bot"), MAPPING)
 result = await Runner.run(agent, "Refund order 10231", hooks=CommitLayerHooks(recorder))
 verdict = recorder.wait("refund:order_10231")  # the completion gate
 ```

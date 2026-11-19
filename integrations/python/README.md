@@ -57,11 +57,17 @@ follows cannot be held that long (an activity with a short timeout, a signed pay
 the client with a smaller bound, `Client(max_retries=1, max_retry_wait=2.0)`, or with `max_retries=0` to turn
 retrying off.
 
+The packages read no environment themselves: each takes a `commitlayer` client, used as given. The examples build
+it with `commitlayer.recorder()` (commitlayer 0.1.4 or later), which reads `COMMITLAYER_RECORDER_KEY`,
+`COMMITLAYER_API_URL`, `COMMITLAYER_WORKSPACE_ID` and `COMMITLAYER_CONTRACT_ID`, the names of the quickstart's
+`commitlayer-recorder.env`; `COMMITLAYER_API_KEY` still works there as a deprecated fallback that warns once. The
+integrations only record actions and read verdicts, so give them a recorder key, never `COMMITLAYER_EVIDENCE_KEY`.
+
 Python 3.10+. Both packages import without their runtime SDK installed (the SDK is imported lazily), so a
 service that uses only one of them does not need the other.
 
 ```bash
 pip install 'commitlayer-integrations[temporal,inngest]'
-export COMMITLAYER_API_KEY=spk_...                                   # never log or print it
+export COMMITLAYER_RECORDER_KEY=spk_...                              # never log or print it
 .venv/bin/python -m pytest integrations/python/tests -q              # no Temporal server, no Inngest dev server
 ```

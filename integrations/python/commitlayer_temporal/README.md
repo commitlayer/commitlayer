@@ -15,7 +15,8 @@ control the independent facts, the governing contract, or the final evidence.
 
 ```bash
 pip install 'commitlayer-integrations[temporal]'
-export COMMITLAYER_API_KEY=spk_...   # read by commitlayer.Client; never log or print it
+export COMMITLAYER_RECORDER_KEY=spk_...  # read by commitlayer.recorder(); never log or print it
+                                         # (COMMITLAYER_API_KEY still works, deprecated)
 ```
 
 ## 1. Record each activity as an action: the interceptor
@@ -23,12 +24,12 @@ export COMMITLAYER_API_KEY=spk_...   # read by commitlayer.Client; never log or 
 ```python
 from concurrent.futures import ThreadPoolExecutor
 
-from commitlayer import Client
+import commitlayer
 from commitlayer_temporal import CommitLayerInterceptor, CommitLayerVerifier
 from temporalio.client import Client as TemporalClient
 from temporalio.worker import Worker
 
-cl = Client()  # COMMITLAYER_API_KEY / COMMITLAYER_API_URL from the environment
+cl = commitlayer.recorder()  # COMMITLAYER_RECORDER_KEY / COMMITLAYER_API_URL from the environment
 
 MAPPING = {
     # activity name -> what to record

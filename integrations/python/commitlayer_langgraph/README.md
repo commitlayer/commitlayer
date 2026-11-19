@@ -4,13 +4,14 @@ Record a tool call as a CommitLayer action before the tool runs, then gate the g
 
 ```bash
 pip install 'commitlayer-integrations[langgraph]'
-export COMMITLAYER_API_KEY=spk_...     # a recorder key: records actions, reads verdicts, nothing else
+export COMMITLAYER_RECORDER_KEY=spk_...  # a recorder key: records actions, reads verdicts, nothing else
+                                         # (COMMITLAYER_API_KEY still works, deprecated)
 ```
 
 ## Record every mapped tool call
 
 ```python
-from commitlayer import Client
+import commitlayer
 from commitlayer_integrations.tools import ToolRecorder
 from commitlayer_langgraph import record_tool_calls, record_tool_calls_async
 from langgraph.prebuilt import ToolNode
@@ -25,7 +26,7 @@ MAPPING = {
         "action_id": "refund:{arguments.order_id}",
     }
 }
-recorder = ToolRecorder(Client(agent_id="support-bot"), MAPPING)
+recorder = ToolRecorder(commitlayer.recorder(agent_id="support-bot"), MAPPING)
 
 tools = ToolNode(
     [refund_payment, close_ticket],

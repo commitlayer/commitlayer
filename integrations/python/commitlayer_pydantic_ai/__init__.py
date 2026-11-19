@@ -5,11 +5,11 @@ toolset and records the mapped calls before delegating to it. The recorder sees 
 the run's ``tool_call_id``; the tool's result is never sent.
 
     from pydantic_ai import Agent, FunctionToolset
-    from commitlayer import Client
+    import commitlayer
     from commitlayer_integrations.tools import ToolRecorder
     from commitlayer_pydantic_ai import RecordingToolset
 
-    recorder = ToolRecorder(Client(agent_id="support-bot"), MAPPING)
+    recorder = ToolRecorder(commitlayer.recorder(agent_id="support-bot"), MAPPING)
     tools = FunctionToolset(tools=[refund_payment, close_ticket])
     agent = Agent("openai:gpt-5", toolsets=[RecordingToolset(tools, recorder)])
 

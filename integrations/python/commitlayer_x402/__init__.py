@@ -49,7 +49,7 @@ __all__ = [
     "settlement_status",
     "__version__",
 ]
-__version__ = "0.1.3"  # kept equal to pyproject.toml; tests check it
+__version__ = "0.1.4"  # kept equal to pyproject.toml; tests check it
 
 log = logging.getLogger("commitlayer.x402")
 
