@@ -9,6 +9,7 @@ import re
 import subprocess
 import sys
 import threading
+import warnings
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
@@ -36,6 +37,7 @@ from commitlayer_mcp_recorder import (  # noqa: E402
 )
 
 TEST_KEY = "local-test-key"
+KEY_NAMES = ("COMMITLAYER_RECORDER_KEY", "COMMITLAYER_API_KEY", "COMMITLAYER_EVIDENCE_KEY")
 REQUESTED_AT = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 
 MAPPING: dict[str, Any] = {
@@ -190,7 +192,7 @@ def run_recorder(
     env = {
         k: v
         for k, v in os.environ.items()
-        if k.upper() not in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "COMMITLAYER_API_KEY")
+        if k.upper() not in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", *KEY_NAMES)
     }
     env.update(
         {
@@ -201,7 +203,7 @@ def run_recorder(
         }
     )
     if api_key is not None:
-        env["COMMITLAYER_API_KEY"] = api_key
+        env["COMMITLAYER_RECORDER_KEY"] = api_key
     if env_extra:
         env.update(env_extra)
     proc = subprocess.Popen(
@@ -364,11 +366,77 @@ def test_no_api_key_is_a_passthrough_with_one_warning(tmp_path: Path, api: FakeA
     assert "result" in run.response(1) and "result" in run.response(2)
     assert (
         run.diagnostics.count(
-            "COMMITLAYER_API_KEY is not set; running as a passthrough, nothing will be recorded"
+            "COMMITLAYER_RECORDER_KEY is not set; running as a passthrough, nothing will be recorded"
         )
         == 1
     )
     assert run.returncode == 0
+
+
+# ---------------- the key's environment names ----------------
+
+DEPRECATION = "DeprecationWarning: COMMITLAYER_API_KEY is deprecated; set COMMITLAYER_RECORDER_KEY"
+
+
+def test_the_key_is_read_from_commitlayer_recorder_key(tmp_path: Path, api: FakeApi) -> None:
+    run = run_recorder(tmp_path, [call(1, "refund_payment", {"order_id": "o1"})], api_url=api.url, api_key="rec-key")
+    assert [r.headers["x-api-key"] for r in api.requests] == ["rec-key"]
+    assert "is not set" not in run.stderr and "DeprecationWarning" not in run.stderr
+
+
+def test_commitlayer_api_key_still_works_and_warns_that_it_is_deprecated(tmp_path: Path, api: FakeApi) -> None:
+    run = run_recorder(
+        tmp_path,
+        [call(1, "refund_payment", {"order_id": "o1"}), call(2, "refund_payment", {"order_id": "o2"})],
+        api_url=api.url,
+        api_key=None,
+        env_extra={"COMMITLAYER_API_KEY": "legacy-key"},
+    )
+    assert [r.headers["x-api-key"] for r in api.requests] == ["legacy-key", "legacy-key"]
+    assert run.stderr.count(DEPRECATION) == 1
+    assert "legacy-key" not in run.stderr  # the key itself is never logged
+
+
+def test_commitlayer_recorder_key_wins_over_the_deprecated_name(tmp_path: Path, api: FakeApi) -> None:
+    run = run_recorder(
+        tmp_path,
+        [call(1, "refund_payment", {"order_id": "o1"})],
+        api_url=api.url,
+        api_key="rec-key",
+        env_extra={"COMMITLAYER_API_KEY": "legacy-key"},
+    )
+    assert [r.headers["x-api-key"] for r in api.requests] == ["rec-key"]
+    assert "DeprecationWarning" not in run.stderr
+
+
+def test_the_evidence_key_is_never_read(tmp_path: Path, api: FakeApi) -> None:
+    run = run_recorder(
+        tmp_path,
+        [call(1, "refund_payment", {"order_id": "o1"})],
+        api_url=api.url,
+        api_key=None,
+        env_extra={"COMMITLAYER_EVIDENCE_KEY": "evidence-key"},
+    )
+    assert api.requests == []
+    assert "COMMITLAYER_RECORDER_KEY is not set" in run.stderr
+
+
+def test_api_key_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in KEY_NAMES:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(commitlayer_mcp_recorder, "_WARNED", set())
+    assert commitlayer_mcp_recorder.api_key_from_env() == ""
+    monkeypatch.setenv("COMMITLAYER_EVIDENCE_KEY", "evidence-key")
+    assert commitlayer_mcp_recorder.api_key_from_env() == ""
+    monkeypatch.setenv("COMMITLAYER_RECORDER_KEY", "rec-key")
+    monkeypatch.setenv("COMMITLAYER_API_KEY", "legacy-key")
+    assert commitlayer_mcp_recorder.api_key_from_env() == "rec-key"
+    monkeypatch.delenv("COMMITLAYER_RECORDER_KEY")
+    with pytest.warns(DeprecationWarning, match="COMMITLAYER_API_KEY is deprecated; set COMMITLAYER_RECORDER_KEY"):
+        assert commitlayer_mcp_recorder.api_key_from_env() == "legacy-key"
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")  # once per process: a second read does not warn again
+        assert commitlayer_mcp_recorder.api_key_from_env() == "legacy-key"
 
 
 def test_compensates_path_is_carried(tmp_path: Path, api: FakeApi) -> None:

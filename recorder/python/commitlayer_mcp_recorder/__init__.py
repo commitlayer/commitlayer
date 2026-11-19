@@ -18,6 +18,10 @@ by default) and their waits happen inside the time one record is allowed anyway 
 never holds a call longer than an unreachable one did, and no wait is started unless a second of that time
 would be left for the attempt after it.
 
+The key is read from ``COMMITLAYER_RECORDER_KEY`` (``api_key_from_env``), the name the SDKs and the in-product
+quickstart's ``commitlayer-recorder.env`` use. ``COMMITLAYER_API_KEY`` still works as a deprecated fallback and warns
+once. The recorder only records actions, so it never reads ``COMMITLAYER_EVIDENCE_KEY``.
+
 Standard library only. ``load_mapping`` reads the mapping file, ``build_action`` turns one ``tools/call`` into
 an action body and ``Recorder`` holds the policy (key, URL, fail-open) and the request ids still waiting for
 a downstream answer.
@@ -27,6 +31,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import random
 import re
 import sys
@@ -34,6 +39,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+import warnings
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -42,9 +48,12 @@ from pathlib import Path
 from typing import Any
 
 __all__ = [
+    "API_URL_ENV",
     "DEFAULT_API_URL",
     "JSONRPC_RECORDING_FAILED",
+    "LEGACY_KEY_ENV",
     "LOG_PREFIX",
+    "RECORDER_KEY_ENV",
     "Decision",
     "Mapping",
     "MappingError",
@@ -53,15 +62,21 @@ __all__ = [
     "ToolMapping",
     "UnresolvedPath",
     "__version__",
+    "api_key_from_env",
     "build_action",
     "load_mapping",
     "log_to_stderr",
     "post_action",
     "resolve_path",
 ]
-__version__ = "0.1.3"
+__version__ = "0.1.4"
 
 DEFAULT_API_URL = "https://api.commitlayer.ai"
+# The canonical environment names, as in the SDKs (commitlayer 0.1.4) and the quickstart's commitlayer-recorder.env.
+API_URL_ENV = "COMMITLAYER_API_URL"
+RECORDER_KEY_ENV = "COMMITLAYER_RECORDER_KEY"
+# Deprecated since 0.1.4: the generic key name. Still read, with a DeprecationWarning.
+LEGACY_KEY_ENV = "COMMITLAYER_API_KEY"
 LOG_PREFIX = "commitlayer-recorder: "
 JSONRPC_RECORDING_FAILED = -32000
 RETRY_STATUSES = (429, 503)
@@ -84,6 +99,27 @@ def log_to_stderr(message: str) -> None:
     """Write one diagnostic line to stderr. Every line the recorder emits carries ``LOG_PREFIX``."""
     sys.stderr.write(f"{LOG_PREFIX}{message}\n")
     sys.stderr.flush()
+
+
+_WARNED: set[str] = set()
+
+
+def api_key_from_env() -> str:
+    """The recorder key from the environment: ``COMMITLAYER_RECORDER_KEY``, else the deprecated ``COMMITLAYER_API_KEY``
+    (with a ``DeprecationWarning``, once per process), else ``""``. ``COMMITLAYER_EVIDENCE_KEY`` is never read."""
+    key = os.environ.get(RECORDER_KEY_ENV) or ""
+    if key:
+        return key
+    legacy = os.environ.get(LEGACY_KEY_ENV) or ""
+    if legacy and LEGACY_KEY_ENV not in _WARNED:
+        _WARNED.add(LEGACY_KEY_ENV)
+        warnings.warn(
+            f"{LEGACY_KEY_ENV} is deprecated; set {RECORDER_KEY_ENV} (and keep the recorder and evidence keys in "
+            "separate processes).",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+    return legacy
 
 
 class MappingError(ValueError):
