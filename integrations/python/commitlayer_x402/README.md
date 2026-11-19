@@ -23,11 +23,11 @@ The v1 spellings (`X-PAYMENT-REQUIRED`, `X-PAYMENT`, `X-PAYMENT-RESPONSE`) are r
 ## Use
 
 ```python
+import commitlayer
 import httpx
-from commitlayer import Client
 from commitlayer_x402 import X402Observer
 
-recorder = Client(api_key=os.environ["COMMITLAYER_RECORDER_KEY"])
+recorder = commitlayer.recorder()   # COMMITLAYER_RECORDER_KEY (COMMITLAYER_API_KEY still works, deprecated)
 observer = X402Observer(recorder, kind="api_call", contract_version=3, decimals=6)
 http = httpx.Client(event_hooks=observer.httpx_hooks())
 

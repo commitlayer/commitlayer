@@ -9,7 +9,14 @@ import { createInterface } from "node:readline";
 import type { Readable, Writable } from "node:stream";
 import type { AddressInfo } from "node:net";
 
-import { parseMapping, Recorder, type Json, type RecorderOptions } from "../src/index.js";
+import {
+  _resetDeprecationWarnings,
+  apiKeyFromEnv,
+  parseMapping,
+  Recorder,
+  type Json,
+  type RecorderOptions,
+} from "../src/index.js";
 
 // The compiled CLI and the fake downstream server. The test suite is compiled to dist-test/test/, so the CLI
 // is dist-test/src/cli.js and the fake server stays where it is under test/.
@@ -132,7 +139,9 @@ async function waitFor(pred: () => boolean, what: string, ms = 3000): Promise<vo
 
 const KEY = "spk_test_not_a_real_key";
 const baseEnv = (extra: Record<string, string | undefined> = {}) => ({
-  COMMITLAYER_API_KEY: KEY,
+  COMMITLAYER_RECORDER_KEY: KEY,
+  COMMITLAYER_API_KEY: undefined,
+  COMMITLAYER_EVIDENCE_KEY: undefined,
   COMMITLAYER_API_URL: api.url,
   COMMITLAYER_RECORDER_MAP: undefined,
   ...extra,
@@ -371,7 +380,7 @@ test("--no-fail-open with API 500 answers a JSON-RPC error and does not forward"
 });
 
 test("without an API key the recorder warns once and is a pure passthrough", async () => {
-  const p = proxy([], { COMMITLAYER_API_KEY: undefined });
+  const p = proxy([], { COMMITLAYER_RECORDER_KEY: undefined });
   p.send(initialize);
   await p.next();
   p.send(refundCall(2, { order_id: "ord_8" }));
@@ -382,7 +391,71 @@ test("without an API key the recorder warns once and is a pure passthrough", asy
   assert.equal(await p.downstreamCalls(4), 2);
   await p.close();
   assert.deepEqual(p.warnings(), [
-    "commitlayer-recorder: COMMITLAYER_API_KEY is not set: running as a passthrough, nothing is recorded",
+    "commitlayer-recorder: COMMITLAYER_RECORDER_KEY is not set: running as a passthrough, nothing is recorded",
+  ]);
+});
+
+// ---------------- the key's environment names ----------------
+
+const DEPRECATION = "DeprecationWarning: COMMITLAYER_API_KEY is deprecated; set COMMITLAYER_RECORDER_KEY";
+
+/** Two mapped calls through the CLI with this environment; the keys the API received, and the stderr. */
+async function keysSent(env: Record<string, string | undefined>): Promise<{ keys: unknown[]; stderr: string }> {
+  const p = proxy([], env);
+  p.send(refundCall(1, { order_id: "ord_k1" }));
+  p.send(refundCall(2, { order_id: "ord_k2" }));
+  await p.next();
+  await p.next();
+  await p.close();
+  return { keys: api.calls.map((c) => c.headers["x-api-key"]), stderr: p.stderr };
+}
+
+test("the key is read from COMMITLAYER_RECORDER_KEY", async () => {
+  const { keys, stderr } = await keysSent({ COMMITLAYER_RECORDER_KEY: "rec-key" });
+  assert.deepEqual(keys, ["rec-key", "rec-key"]);
+  assert.ok(!stderr.includes("DeprecationWarning") && !stderr.includes("is not set"), stderr);
+});
+
+test("COMMITLAYER_API_KEY still works and warns once that it is deprecated", async () => {
+  const { keys, stderr } = await keysSent({ COMMITLAYER_RECORDER_KEY: undefined, COMMITLAYER_API_KEY: "legacy-key" });
+  assert.deepEqual(keys, ["legacy-key", "legacy-key"]);
+  assert.equal(stderr.split(DEPRECATION).length - 1, 1, stderr);
+  assert.ok(!stderr.includes("legacy-key"), "the key itself is never logged");
+});
+
+test("COMMITLAYER_RECORDER_KEY wins over the deprecated name", async () => {
+  const { keys, stderr } = await keysSent({ COMMITLAYER_RECORDER_KEY: "rec-key", COMMITLAYER_API_KEY: "legacy-key" });
+  assert.deepEqual(keys, ["rec-key", "rec-key"]);
+  assert.ok(!stderr.includes("DeprecationWarning"), stderr);
+});
+
+test("the evidence key is never read", async () => {
+  const p = proxy([], { COMMITLAYER_RECORDER_KEY: undefined, COMMITLAYER_EVIDENCE_KEY: "evidence-key" });
+  p.send(refundCall(1, { order_id: "ord_e1" }));
+  await p.next();
+  await p.close();
+  assert.equal(api.calls.length, 0);
+  assert.ok(p.stderr.includes("COMMITLAYER_RECORDER_KEY is not set"), p.stderr);
+});
+
+test("apiKeyFromEnv: the canonical name, then the deprecated one with one warning, never the evidence key", async () => {
+  const warnings: string[] = [];
+  const listener = (w: Error) => warnings.push(`${w.name}: ${w.message}`);
+  process.on("warning", listener);
+  _resetDeprecationWarnings();
+  try {
+    assert.equal(apiKeyFromEnv({}), "");
+    assert.equal(apiKeyFromEnv({ COMMITLAYER_EVIDENCE_KEY: "ev" }), "");
+    assert.equal(apiKeyFromEnv({ COMMITLAYER_RECORDER_KEY: "rec", COMMITLAYER_API_KEY: "legacy" }), "rec");
+    assert.equal(apiKeyFromEnv({ COMMITLAYER_API_KEY: "legacy" }), "legacy");
+    assert.equal(apiKeyFromEnv({ COMMITLAYER_API_KEY: "legacy" }), "legacy");
+    await new Promise((r) => setImmediate(r)); // warnings are delivered on a later tick
+  } finally {
+    process.off("warning", listener);
+    _resetDeprecationWarnings();
+  }
+  assert.deepEqual(warnings, [
+    "DeprecationWarning: COMMITLAYER_API_KEY is deprecated; set COMMITLAYER_RECORDER_KEY (and keep the recorder and evidence keys in separate processes).",
   ]);
 });
 

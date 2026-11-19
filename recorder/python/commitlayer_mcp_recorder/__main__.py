@@ -16,13 +16,17 @@ import os
 import subprocess
 import sys
 import threading
+import warnings
 from typing import Any, BinaryIO
 
 from . import (
+    API_URL_ENV,
     DEFAULT_API_URL,
+    RECORDER_KEY_ENV,
     MappingError,
     Recorder,
     __version__,
+    api_key_from_env,
     load_mapping,
     log_to_stderr,
 )
@@ -38,8 +42,9 @@ def build_parser() -> argparse.ArgumentParser:
             "CommitLayer actions before they are forwarded. The downstream command follows '--'."
         ),
         epilog=(
-            "Environment: COMMITLAYER_API_KEY (required to record; without it the proxy is a passthrough), "
-            f"COMMITLAYER_API_URL (default {DEFAULT_API_URL}), COMMITLAYER_RECORDER_MAP (default for --map)."
+            f"Environment: {RECORDER_KEY_ENV} (required to record; without it the proxy is a passthrough; "
+            f"COMMITLAYER_API_KEY is a deprecated fallback), {API_URL_ENV} (default {DEFAULT_API_URL}), "
+            "COMMITLAYER_RECORDER_MAP (default for --map)."
         ),
     )
     parser.add_argument(
@@ -51,7 +56,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--workflow-id", help="overrides workflow_id from the mapping file")
     parser.add_argument(
         "--api-url",
-        default=os.environ.get("COMMITLAYER_API_URL") or DEFAULT_API_URL,
+        default=os.environ.get(API_URL_ENV) or DEFAULT_API_URL,
         help=f"CommitLayer API base URL; default $COMMITLAYER_API_URL or {DEFAULT_API_URL}",
     )
     parser.add_argument(
@@ -194,9 +199,12 @@ def main(argv: list[str] | None = None) -> int:
     except MappingError as e:
         log_to_stderr(f"invalid mapping {args.map}: {e}")
         return 2
-    api_key = os.environ.get("COMMITLAYER_API_KEY") or ""
+    with warnings.catch_warnings():
+        if not sys.warnoptions:  # show the deprecation on stderr unless the user chose their own filters (-W)
+            warnings.simplefilter("default", DeprecationWarning)
+        api_key = api_key_from_env()
     if not api_key:
-        log_to_stderr("COMMITLAYER_API_KEY is not set; running as a passthrough, nothing will be recorded")
+        log_to_stderr(f"{RECORDER_KEY_ENV} is not set; running as a passthrough, nothing will be recorded")
     recorder = Recorder(
         mapping,
         api_key=api_key,

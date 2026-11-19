@@ -6,11 +6,11 @@ which is everything the recorder needs; hosted tools (web search, computer use) 
 left alone. The hook never blocks the call and never reads its result.
 
     from agents import Agent, Runner
-    from commitlayer import Client
+    import commitlayer
     from commitlayer_integrations.tools import ToolRecorder
     from commitlayer_openai_agents import CommitLayerHooks
 
-    recorder = ToolRecorder(Client(agent_id="support-bot"), MAPPING)
+    recorder = ToolRecorder(commitlayer.recorder(agent_id="support-bot"), MAPPING)
     result = await Runner.run(agent, "Refund order 10231", hooks=CommitLayerHooks(recorder))
     recorder.wait("refund:order_10231")           # the completion gate
 

@@ -109,19 +109,22 @@ test("sendAction maps the body onto recordAction and omits absent optional field
 test("resolveClient returns the given client and otherwise needs a key", () => {
   const api = fakeApi();
   assert.equal(resolveClient({ client: api.client }), api.client);
-  const saved = process.env.COMMITLAYER_API_KEY;
-  delete process.env.COMMITLAYER_API_KEY;
+  const names = ["COMMITLAYER_RECORDER_KEY", "COMMITLAYER_API_KEY"];
+  const saved = names.map((n) => process.env[n]);
+  for (const n of names) delete process.env[n];
   try {
     assert.throws(() => resolveClient({}), /apiKey is required/);
   } finally {
-    if (saved !== undefined) process.env.COMMITLAYER_API_KEY = saved;
+    names.forEach((n, i) => {
+      if (saved[i] !== undefined) process.env[n] = saved[i];
+    });
   }
   const c = resolveClient({ apiKey: "spk_test", apiUrl: "https://example.test/" });
   assert.equal(c instanceof Object, true);
 });
 
 test("sdkClientOptions: the caller's retry options, then the integration's, else none so the SDK's defaults apply", () => {
-  const base = { apiKey: "spk_test", apiUrl: "https://example.test", timeoutMs: 5000 };
+  const base = { role: "recorder" as const, apiKey: "spk_test", apiUrl: "https://example.test", timeoutMs: 5000 };
   assert.deepEqual(INLINE_RETRY, { maxRetries: 2, maxRetryWaitMs: 2000 });
   assert.deepEqual(NO_RETRY, { maxRetries: 0 });
   assert.deepEqual(sdkClientOptions(base), base);

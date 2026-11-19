@@ -14,7 +14,7 @@ import {
   type RecordActionOptions,
 } from "commitlayer";
 
-export const VERSION = "0.1.4";
+export const VERSION = "0.1.5";
 
 export type { Json, RecordActionOptions };
 export { Client, CommitLayerError };
@@ -27,7 +27,11 @@ export interface ActionClient {
   request?(method: string, path: string, body?: Json | null): Promise<Json>;
 }
 
-/** Either a ready client or the options to build one (`COMMITLAYER_API_KEY` / `COMMITLAYER_API_URL` when omitted). */
+/**
+ * Either a ready client or the options to build one. What is omitted comes from the environment, read by the SDK
+ * as a recorder: `COMMITLAYER_RECORDER_KEY` (`COMMITLAYER_API_KEY` is a deprecated fallback that warns once) and
+ * `COMMITLAYER_API_URL`. The integrations only record actions, so `COMMITLAYER_EVIDENCE_KEY` is never read.
+ */
 export interface ClientOptions {
   client?: ActionClient;
   apiKey?: string;
@@ -63,10 +67,16 @@ export const NO_RETRY: Readonly<RetrySettings> = Object.freeze({ maxRetries: 0 }
 
 /**
  * The options the SDK's `Client` is built with: the caller's own, then the integration's retry settings for
- * what the caller left unset. Without either the SDK's defaults apply (3 retries, 10 seconds).
+ * what the caller left unset. Without either the SDK's defaults apply (3 retries, 10 seconds). The role is always
+ * `recorder`, so a key left out is read from `COMMITLAYER_RECORDER_KEY` and never from the evidence key.
  */
 export function sdkClientOptions(opts: ClientOptions, retry: Readonly<RetrySettings> = {}): SdkClientOptions & RetrySettings {
-  const out: SdkClientOptions & RetrySettings = { apiKey: opts.apiKey, apiUrl: opts.apiUrl, timeoutMs: opts.timeoutMs };
+  const out: SdkClientOptions & RetrySettings = {
+    role: "recorder",
+    apiKey: opts.apiKey,
+    apiUrl: opts.apiUrl,
+    timeoutMs: opts.timeoutMs,
+  };
   const maxRetries = opts.maxRetries ?? retry.maxRetries;
   const maxRetryWaitMs = opts.maxRetryWaitMs ?? retry.maxRetryWaitMs;
   if (maxRetries !== undefined) out.maxRetries = maxRetries;

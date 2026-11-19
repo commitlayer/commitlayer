@@ -26,12 +26,16 @@ systems of record (payments, orders, CRM), not from what the workflow says it di
 
 ```bash
 npm install @commitlayer/integrations
-export COMMITLAYER_API_KEY=spk_...     # a workspace API key; never written to logs
+export COMMITLAYER_RECORDER_KEY=spk_...   # a recorder key; never written to logs
 export COMMITLAYER_API_URL=https://api.commitlayer.ai   # the default
 ```
 
-The package depends on the `commitlayer` SDK (`sdk/js`) and takes either a ready `Client` (`client: cl`) or the
-`apiKey` / `apiUrl` options; with neither, the environment variables apply.
+The package depends on the `commitlayer` SDK (`sdk/js`, 0.1.5 or later) and takes either a ready `Client`
+(`client: cl`) or the `apiKey` / `apiUrl` options; with neither, the environment variables apply. The client it
+builds is a recorder (`role: "recorder"`): the SDK reads `COMMITLAYER_RECORDER_KEY` and `COMMITLAYER_API_URL`, the
+names of the quickstart's `commitlayer-recorder.env`. `COMMITLAYER_API_KEY` (before 0.1.5) still works when
+`COMMITLAYER_RECORDER_KEY` is not set, and warns once that it is deprecated. The integrations only record actions,
+so `COMMITLAYER_EVIDENCE_KEY` is never read.
 
 ## What gets recorded
 
@@ -274,10 +278,10 @@ or failed) and a `delivered` or `delivery_failed` fact. It never pays, signs, re
 signature or a key.
 
 ```ts
-import { Client } from "commitlayer";
+import * as commitlayer from "commitlayer";
 import { x402Observer } from "@commitlayer/integrations/x402";
 
-const recorder = new Client({ apiKey: process.env.COMMITLAYER_RECORDER_KEY });   // actions:record
+const recorder = commitlayer.recorder();   // COMMITLAYER_RECORDER_KEY (actions:record), COMMITLAYER_API_URL
 const observer = x402Observer({ recorder, kind: "api_call", contractVersion: 3, decimals: 6 });
 const paidFetch = observer.wrap(x402Fetch);    // the x402 client's fetch, which pays and retries
 const res = await paidFetch("https://api.example-data.com/v1/quote");

@@ -6,11 +6,11 @@ call in the process. :func:`install` registers a recording hook built on
 call and never alters its input or result: it declares the intent, and CommitLayer verifies the outcome
 later from the systems of record.
 
-    from commitlayer import Client
+    import commitlayer
     from commitlayer_integrations.tools import ToolRecorder
     import commitlayer_crewai
 
-    recorder = ToolRecorder(Client(agent_id="ops-crew"), MAPPING)
+    recorder = ToolRecorder(commitlayer.recorder(agent_id="ops-crew"), MAPPING)
     commitlayer_crewai.install(recorder)          # before the crew kicks off
     crew.kickoff()
     recorder.wait("refund:order_10231")           # the completion gate, when the crew is done

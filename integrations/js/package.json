@@ -1,6 +1,6 @@
 {
   "name": "@commitlayer/integrations",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "CommitLayer integrations for workflow engines and x402: record Temporal activities and Inngest steps as actions before they run, gate workflow completion on the verdict, and record purchases made over x402",
   "license": "MIT",
   "type": "module",
@@ -37,7 +37,7 @@
     "test": "tsc -p tsconfig.test.json && node --test dist-test/test/*.test.js"
   },
   "dependencies": {
-    "commitlayer": "^0.1.0"
+    "commitlayer": "^0.1.5"
   },
   "peerDependencies": {
     "@temporalio/activity": ">=1.8.0",

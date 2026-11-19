@@ -4,7 +4,7 @@ Each poll goes through the API's completion gate (``GET /v1/actions/{ref}/wait``
 to ``poll_seconds`` and returns the moment the verdict settles; the loop around it lives in
 :func:`commitlayer_integrations.verdict.poll_until_settled` and this module wraps it as a Temporal activity::
 
-    verifier = CommitLayerVerifier(Client())
+    verifier = CommitLayerVerifier(commitlayer.recorder())
     Worker(..., activities=[refund_payment, verifier.commitlayer_verify], activity_executor=ThreadPoolExecutor(8))
 
 and, in the workflow, after the activities whose actions were recorded::

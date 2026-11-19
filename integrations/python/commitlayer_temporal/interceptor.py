@@ -2,10 +2,10 @@
 
 Wire it once on the worker::
 
-    from commitlayer import Client
+    import commitlayer
     from commitlayer_temporal import CommitLayerInterceptor
 
-    cl = Client()  # COMMITLAYER_API_KEY from the environment; never log it
+    cl = commitlayer.recorder()  # COMMITLAYER_RECORDER_KEY from the environment; never log it
     worker = Worker(
         client, task_queue="orders",
         workflows=[RefundWorkflow], activities=[refund_payment],

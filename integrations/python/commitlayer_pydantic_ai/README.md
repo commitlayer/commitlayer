@@ -4,16 +4,16 @@ Record tool calls as CommitLayer actions before the tools run.
 
 ```bash
 pip install 'commitlayer-integrations[pydantic-ai]'
-export COMMITLAYER_API_KEY=spk_...     # a recorder key
+export COMMITLAYER_RECORDER_KEY=spk_...  # a recorder key (COMMITLAYER_API_KEY still works, deprecated)
 ```
 
 ```python
 from pydantic_ai import Agent, FunctionToolset
-from commitlayer import Client
+import commitlayer
 from commitlayer_integrations.tools import ToolRecorder
 from commitlayer_pydantic_ai import RecordingToolset
 
-recorder = ToolRecorder(Client(agent_id="support-bot"), MAPPING)
+recorder = ToolRecorder(commitlayer.recorder(agent_id="support-bot"), MAPPING)
 tools = FunctionToolset(tools=[refund_payment, close_ticket])
 agent = Agent("openai:gpt-5", toolsets=[RecordingToolset(tools, recorder)])
 ```

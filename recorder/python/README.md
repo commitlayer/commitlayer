@@ -13,7 +13,7 @@ evidence. Verification reads the systems of record.
 
 ```bash
 pip install commitlayer-mcp-recorder    # `pip install pyyaml` for .yaml mappings
-export COMMITLAYER_API_KEY=spk_...      # a workspace API key; without it the proxy is a passthrough
+export COMMITLAYER_RECORDER_KEY=spk_...  # a recorder key; without it the proxy is a passthrough
 commitlayer-mcp-recorder --map mapping.json -- npx -y @stripe/mcp --tools=all
 ```
 
@@ -30,7 +30,7 @@ Claude Desktop (`claude_desktop_config.json`):
     "stripe": {
       "command": "commitlayer-mcp-recorder",
       "args": ["--map", "/etc/commitlayer/stripe.json", "--agent-id", "support-bot", "--", "npx", "-y", "@stripe/mcp", "--tools=all"],
-      "env": {"COMMITLAYER_API_KEY": "spk_..."}
+      "env": {"COMMITLAYER_RECORDER_KEY": "spk_..."}
     }
   }
 }
@@ -39,7 +39,7 @@ Claude Desktop (`claude_desktop_config.json`):
 Claude Code:
 
 ```bash
-claude mcp add stripe -e COMMITLAYER_API_KEY=spk_... -- commitlayer-mcp-recorder --map stripe.json -- npx -y @stripe/mcp --tools=all
+claude mcp add stripe -e COMMITLAYER_RECORDER_KEY=spk_... -- commitlayer-mcp-recorder --map stripe.json -- npx -y @stripe/mcp --tools=all
 ```
 
 Cursor and other clients use the same `command` / `args` / `env` shape. The downstream server does not know
@@ -62,8 +62,11 @@ commitlayer-mcp-recorder --map mapping.json [--agent-id ID] [--workflow-id ID] [
 | `--no-fail-open` | When recording fails, refuse the call instead of forwarding it (see below). |
 | `--warn-unmapped` | Log each tool that is called but not mapped, once per tool name. |
 
-Environment: `COMMITLAYER_API_KEY` (required to record; without it the recorder warns once at startup and
-runs as a pure passthrough), `COMMITLAYER_API_URL`, `COMMITLAYER_RECORDER_MAP`. The key is never logged. All
+Environment: `COMMITLAYER_RECORDER_KEY` (required to record; without it the recorder warns once at startup and
+runs as a pure passthrough), `COMMITLAYER_API_URL`, `COMMITLAYER_RECORDER_MAP`. These are the names the SDKs and
+the quickstart's `commitlayer-recorder.env` use. `COMMITLAYER_API_KEY` (before 0.1.4) still works when
+`COMMITLAYER_RECORDER_KEY` is not set, and warns once that it is deprecated. The recorder only records actions, so
+it never reads `COMMITLAYER_EVIDENCE_KEY`. The key is never logged. All
 diagnostics go to stderr, one line each, prefixed `commitlayer-recorder:`. The downstream server's own stderr
 is relayed as is.
 
@@ -194,15 +197,17 @@ server never sees it. Other traffic is unaffected.
 ## Library use
 
 ```python
-from commitlayer_mcp_recorder import Recorder, build_action, load_mapping
+from commitlayer_mcp_recorder import Recorder, api_key_from_env, build_action, load_mapping
 
 mapping = load_mapping("mapping.json")
-recorder = Recorder(mapping, api_key="spk_...", agent_id="support-bot")  # timeout=5.0, max_retries=2
+recorder = Recorder(mapping, api_key=api_key_from_env(), agent_id="support-bot")  # timeout=5.0, max_retries=2
 # timeout=None puts no limit on the request, as before; such a record is sent once and never retried
 decision = recorder.before_forward(message)  # a parsed client message; .forward, .action_id, .error
 recorder.after_response(message)  # a parsed server message; logs the isError flag
 ```
 
+`Recorder` reads no environment itself: `api_key_from_env()` returns `COMMITLAYER_RECORDER_KEY`, or the deprecated
+`COMMITLAYER_API_KEY` with a `DeprecationWarning`, or `""`. A key passed as `api_key` is always the one used.
 `build_action(tool_name, call_params, tool_mapping, request_id=...)` returns the body shown above.
 `post_action` sends it once and raises `RecordingError`, which carries `status` (the HTTP status, or `None` when
 there was no answer) and `retry_after` (the seconds `Retry-After` stated, or `None`). A custom `transport` is

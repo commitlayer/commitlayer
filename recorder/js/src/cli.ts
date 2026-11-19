@@ -2,9 +2,9 @@
 /**
  * commitlayer-mcp-recorder: the bin entry. Parses the flags before `--`, loads the mapping, and runs the proxy
  * around the downstream command after `--`. Every diagnostic goes to stderr, prefixed `commitlayer-recorder:`.
- * The API key is read from COMMITLAYER_API_KEY and never logged.
+ * The key is read from COMMITLAYER_RECORDER_KEY (COMMITLAYER_API_KEY is a deprecated fallback) and never logged.
  */
-import { loadMapping, MappingError, run, VERSION } from "./index.js";
+import { apiKeyFromEnv, ENV, loadMapping, MappingError, run, VERSION } from "./index.js";
 
 const USAGE = `usage: commitlayer-mcp-recorder --map mapping.json [options] -- <downstream command> [args...]
 
@@ -23,7 +23,8 @@ options:
   --version, --help
 
 environment:
-  COMMITLAYER_API_KEY        required to record; without it the recorder warns once and is a pure passthrough
+  COMMITLAYER_RECORDER_KEY   required to record; without it the recorder warns once and is a pure passthrough
+                             (COMMITLAYER_API_KEY is read when it is not set: deprecated, with a warning)
   COMMITLAYER_API_URL        default API base URL
   COMMITLAYER_RECORDER_MAP   default for --map
 `;
@@ -111,7 +112,7 @@ function parseArgs(argv: string[]): Parsed {
 }
 
 const parsed = parseArgs(process.argv.slice(2));
-const mapFile = parsed.map ?? process.env.COMMITLAYER_RECORDER_MAP;
+const mapFile = parsed.map ?? process.env[ENV.recorderMap];
 if (!mapFile) fail(`--map is required (or set COMMITLAYER_RECORDER_MAP)\n\n${USAGE}`);
 if (parsed.command.length === 0) fail(`no downstream command after "--"\n\n${USAGE}`);
 
@@ -127,8 +128,8 @@ const code = await run({
   mapping,
   command,
   args,
-  apiKey: process.env.COMMITLAYER_API_KEY,
-  apiUrl: parsed.apiUrl ?? process.env.COMMITLAYER_API_URL,
+  apiKey: apiKeyFromEnv(),
+  apiUrl: parsed.apiUrl ?? process.env[ENV.apiUrl],
   timeoutMs: parsed.timeout === undefined ? undefined : Math.round(parsed.timeout * 1000),
   maxRetries: parsed.retries,
   failOpen: parsed.failOpen,
