@@ -23,9 +23,13 @@ is a claim by the agent's side of the line; the verdict comes from the facts.
 
 ```bash
 npm install -g @commitlayer/mcp-recorder
-export COMMITLAYER_API_KEY=spk_...            # a workspace API key; never written to logs
+export COMMITLAYER_RECORDER_KEY=spk_...       # a recorder key; never written to logs
 export COMMITLAYER_API_URL=https://api.commitlayer.ai   # the default
 ```
+
+These are the names the SDKs and the quickstart's `commitlayer-recorder.env` use. `COMMITLAYER_API_KEY` (before
+0.1.5) still works when `COMMITLAYER_RECORDER_KEY` is not set, and warns once that it is deprecated. The recorder
+only records actions, so it never reads `COMMITLAYER_EVIDENCE_KEY`.
 
 ## Wrap a server
 
@@ -43,7 +47,7 @@ Claude Desktop (`claude_desktop_config.json`):
     "stripe": {
       "command": "commitlayer-mcp-recorder",
       "args": ["--map", "/etc/commitlayer/stripe.json", "--", "npx", "-y", "@stripe/mcp", "--tools=all"],
-      "env": { "COMMITLAYER_API_KEY": "spk_..." }
+      "env": { "COMMITLAYER_RECORDER_KEY": "spk_..." }
     }
   }
 }
@@ -52,7 +56,7 @@ Claude Desktop (`claude_desktop_config.json`):
 Claude Code:
 
 ```bash
-claude mcp add stripe -e COMMITLAYER_API_KEY=spk_... -- commitlayer-mcp-recorder --map ./stripe.json -- npx -y @stripe/mcp --tools=all
+claude mcp add stripe -e COMMITLAYER_RECORDER_KEY=spk_... -- commitlayer-mcp-recorder --map ./stripe.json -- npx -y @stripe/mcp --tools=all
 ```
 
 Cursor and other clients take the same `command` / `args` / `env` shape. The client sees exactly the tools the
@@ -162,7 +166,7 @@ stays pending until the window closes and every source has caught up.
   the retries are used up the last answer is the failure and the two rules around this one apply.
 - **`--no-fail-open`.** The call is not forwarded; the client receives a JSON-RPC error for that request id,
   `code -32000`, message `CommitLayer recording failed: …`. Later traffic flows normally.
-- **No `COMMITLAYER_API_KEY`.** The recorder warns once at start and runs as a pure passthrough.
+- **No `COMMITLAYER_RECORDER_KEY`.** The recorder warns once at start and runs as a pure passthrough.
 - **Unmapped tool.** Forwarded, not recorded. `--warn-unmapped` logs once per tool name.
 - **Missing subject.** Forwarded, not recorded, with a warning naming the path.
 
@@ -189,7 +193,7 @@ commitlayer-mcp-recorder --map mapping.json [options] -- <downstream command> [a
 ## As a library
 
 ```ts
-import { loadMapping, buildAction, Recorder, run } from "@commitlayer/mcp-recorder";
+import { apiKeyFromEnv, loadMapping, buildAction, Recorder, run } from "@commitlayer/mcp-recorder";
 
 const mapping = loadMapping("mapping.json");
 
@@ -197,12 +201,13 @@ const mapping = loadMapping("mapping.json");
 const body = buildAction(mapping.tools.refund_payment, { name: "refund_payment", arguments: { order_id: "o1" } }, { requestId: 7 });
 
 // Decide line by line: intercept() records a mapped call and says whether to forward it or answer the client.
-const rec = new Recorder({ mapping, apiKey: process.env.COMMITLAYER_API_KEY });
+// The library reads no environment itself: apiKeyFromEnv() is COMMITLAYER_RECORDER_KEY (or the deprecated name).
+const rec = new Recorder({ mapping, apiKey: apiKeyFromEnv() });
 const decision = await rec.intercept(line); // { forward: true } | { forward: false, reply }
 rec.observe(responseLine); // logs "recorded <action_id> → tool result isError=<bool>"
 
 // Or run the whole proxy around a command; resolves with the exit code to propagate.
-const code = await run({ mapping, command: "npx", args: ["-y", "@stripe/mcp"], apiKey: process.env.COMMITLAYER_API_KEY });
+const code = await run({ mapping, command: "npx", args: ["-y", "@stripe/mcp"], apiKey: apiKeyFromEnv() });
 ```
 
 `fetch`, `now` and `log` are injectable for tests, and so are `sleep` and `random`, the wait before a retry and

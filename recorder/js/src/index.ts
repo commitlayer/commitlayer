@@ -14,6 +14,10 @@
  * the same body. The waits and the retries happen inside the record's own time (`timeoutMs`), so a retry never
  * adds to how long a tool call can be held.
  *
+ * The key is read from COMMITLAYER_RECORDER_KEY (`apiKeyFromEnv`), the name the SDKs and the quickstart's
+ * commitlayer-recorder.env use; COMMITLAYER_API_KEY still works as a deprecated fallback and warns once. The
+ * recorder only records actions, so it never reads COMMITLAYER_EVIDENCE_KEY.
+ *
  * The agent may declare its intent. It may read the verdict. It must never control the independent facts,
  * the governing contract, or the final evidence.
  */
@@ -23,7 +27,42 @@ import { readFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 import type { Readable, Writable } from "node:stream";
 
-export const VERSION = "0.1.4";
+export const VERSION = "0.1.5";
+
+/** The environment names the recorder reads: the SDK's (commitlayer 0.1.5) and the quickstart's commitlayer-recorder.env. */
+export const ENV = {
+  apiUrl: "COMMITLAYER_API_URL",
+  recorderKey: "COMMITLAYER_RECORDER_KEY",
+  /** Default for the CLI's --map. */
+  recorderMap: "COMMITLAYER_RECORDER_MAP",
+  /** Deprecated since 0.1.5: the generic key name. Still read, with a warning. */
+  legacyKey: "COMMITLAYER_API_KEY",
+} as const;
+
+let legacyWarned = false;
+
+/**
+ * The recorder key from the environment: COMMITLAYER_RECORDER_KEY, else the deprecated COMMITLAYER_API_KEY (with a
+ * DeprecationWarning, once per process), else "". COMMITLAYER_EVIDENCE_KEY is never read.
+ */
+export function apiKeyFromEnv(env: Record<string, string | undefined> = process.env): string {
+  const key = env[ENV.recorderKey] || "";
+  if (key) return key;
+  const legacy = env[ENV.legacyKey] || "";
+  if (legacy && !legacyWarned) {
+    legacyWarned = true;
+    process.emitWarning(
+      `${ENV.legacyKey} is deprecated; set ${ENV.recorderKey} (and keep the recorder and evidence keys in separate processes).`,
+      "DeprecationWarning",
+    );
+  }
+  return legacy;
+}
+
+/** @internal for tests: warn again on the next deprecated read. */
+export function _resetDeprecationWarnings(): void {
+  legacyWarned = false;
+}
 
 export type Json = Record<string, unknown>;
 
@@ -302,7 +341,10 @@ export function buildAction(rule: ToolRule, callParams: unknown, opts: BuildActi
 
 export interface RecorderOptions {
   mapping: Mapping;
-  /** Without a key the recorder warns once and forwards everything without recording. */
+  /**
+   * Without a key the recorder warns once and forwards everything without recording. The recorder reads no
+   * environment itself: pass `apiKeyFromEnv()` for COMMITLAYER_RECORDER_KEY.
+   */
   apiKey?: string;
   /** Default https://api.commitlayer.ai. */
   apiUrl?: string;
@@ -444,7 +486,7 @@ export class Recorder {
     this.random = opts.random ?? Math.random;
     this.recording = this.apiKey !== "";
     if (!this.recording) {
-      this.log("COMMITLAYER_API_KEY is not set: running as a passthrough, nothing is recorded");
+      this.log(`${ENV.recorderKey} is not set: running as a passthrough, nothing is recorded`);
     }
   }
 
