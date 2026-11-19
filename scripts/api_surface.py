@@ -152,6 +152,10 @@ VERDICT_FIELDS_JS = (
 )
 
 
+BATCHES_REQUIRED = ("links", "facts", "observed_through")
+BATCHES_FIELDS = (*BATCHES_REQUIRED, "workspace_id", "contract_id", "action_id")
+
+
 def _sdk(package: str) -> list[Use]:
     return [
         Use(
@@ -181,6 +185,25 @@ def _sdk(package: str) -> list[Use]:
             ("facts", "observed_through"),
             ("facts", "observed_through"),
             sdk=("publish_batch", "publishBatch"),
+        ),
+        # 0.1.5 (Python) / 0.1.6 (TypeScript): the atomic evidence batch and its preflight.
+        Use(
+            package,
+            "preflight_batches",
+            "POST",
+            "/v1/evidence/batches/preflight",
+            BATCHES_FIELDS,
+            BATCHES_REQUIRED,
+            sdk=("preflight_batches", "preflightBatches"),
+        ),
+        Use(
+            package,
+            "publish_batches",
+            "POST",
+            "/v1/evidence/batches",
+            BATCHES_FIELDS,
+            BATCHES_REQUIRED,
+            sdk=("publish_batches", "publishBatches"),
         ),
         Use(
             package,

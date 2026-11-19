@@ -152,6 +152,66 @@
         "title": "ActionIn",
         "type": "object"
       },
+      "BatchIn": {
+        "additionalProperties": false,
+        "properties": {
+          "action_id": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Action Id"
+          },
+          "contract_id": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Contract Id"
+          },
+          "facts": {
+            "items": {},
+            "maxItems": 1000,
+            "title": "Facts",
+            "type": "array"
+          },
+          "links": {
+            "items": {},
+            "maxItems": 1000,
+            "title": "Links",
+            "type": "array"
+          },
+          "observed_through": {
+            "additionalProperties": true,
+            "title": "Observed Through",
+            "type": "object"
+          },
+          "workspace_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workspace Id"
+          }
+        },
+        "title": "BatchIn",
+        "type": "object"
+      },
       "ConfigureIn": {
         "properties": {
           "configuration": {
@@ -876,6 +936,64 @@
         },
         "responses": {
           "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object"
+                }
+              }
+            },
+            "description": "ok"
+          }
+        }
+      }
+    },
+    "/v1/evidence/batches": {
+      "post": {
+        "operationId": "publish_batches_v1_evidence_batches_post",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BatchIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object"
+                }
+              }
+            },
+            "description": "ok"
+          }
+        }
+      }
+    },
+    "/v1/evidence/batches/preflight": {
+      "post": {
+        "operationId": "preflight_batch_v1_evidence_batches_preflight_post",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BatchIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {

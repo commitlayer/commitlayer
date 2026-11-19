@@ -63,6 +63,28 @@ test("pushFacts accepts the fact", { skip }, async () => {
   assert.equal(r.rejected_count, 0);
 });
 
+test("the atomic batch is checked first and stored whole", { skip }, async () => {
+  const fact = {
+    source: "stripe",
+    subject_id: subject,
+    subject_kind: "order",
+    fact_type: "refund",
+    occurred_at: now(),
+    attributes: { amount: 42.5, currency: "USD" },
+    raw_ref: `live-js-batches:${RUN}`,
+  };
+  const pre = await client.preflightBatches({ facts: [fact], observedThrough: { stripe: now() } });
+  assert.equal(pre.ok, true);
+  assert.equal(pre.written, false);
+  const out = await client.publishBatches({ facts: [fact], observedThrough: { stripe: now() } });
+  assert.equal(out.status, "committed");
+  assert.equal(out.counts.facts, 1);
+  await assert.rejects(
+    client.publishBatches({ facts: [{ ...fact, raw_ref: `live-js-batches-bad:${RUN}`, occurred_at: "not-a-time" }] }),
+    (e) => e.code === "batch_rejected" && e.details.written === false,
+  );
+});
+
 test("getAction is a verification summarizeVerification understands", { skip }, async () => {
   const v = await client.getAction(actionId);
   assert.equal(v.action.action_id, actionId);

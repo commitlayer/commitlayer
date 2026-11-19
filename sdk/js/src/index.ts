@@ -401,6 +401,21 @@ export interface PublishBatchOptions {
   observedThrough: Record<string, string | Date>;
 }
 
+export interface EvidenceBatchOptions {
+  /** The records found; may be empty. Each is a `POST /v1/facts` item. */
+  facts?: Json[];
+  /** Identity links between records (a payment and its order), stored in the same transaction as the records. */
+  links?: Json[];
+  /** source to the time the backend scanned it through (RFC 3339 or a Date), for every source scanned. */
+  observedThrough?: Record<string, string | Date>;
+  /** The action this batch is evidence for, when the caller knows it. It must exist. */
+  actionId?: string;
+  /** Makes the API check every record's type against what this contract reads. */
+  contractId?: string;
+  /** Checked against the key's workspace. Defaults to `COMMITLAYER_WORKSPACE_ID`. */
+  workspaceId?: string;
+}
+
 export class Client {
   readonly apiKey: string;
   readonly apiUrl: string;
@@ -574,6 +589,9 @@ export class Client {
   }
 
   /**
+   * Deprecated: use `publishBatches`, which stores the whole batch or none of it. This route answers per item, so a
+   * refused checkpoint does not undo the records sent with it; read every `accepted`.
+   *
    * `POST /v1/evidence/batch`: the records a backend found and, for every source it scanned, the time it scanned
    * through, including a source with no matching record (`facts` may be empty). Needs an evidence key; a recorder
    * key is refused (403). Returns `{facts, checkpoints, affected_actions, reverify_scheduled, snapshot_versions}`.
@@ -586,6 +604,48 @@ export class Client {
     }
     if (!Object.keys(through).length) throw new Error("observedThrough names at least one source and the time it was scanned through");
     return this.call("POST", "/v1/evidence/batch", { facts: opts.facts ?? [], observed_through: through });
+  }
+
+  private batchesBody(opts: EvidenceBatchOptions): Json {
+    const through: Record<string, string> = {};
+    for (const [source, ts] of Object.entries(opts.observedThrough ?? {})) {
+      through[source] = ts instanceof Date ? ts.toISOString().replace(/\.\d{3}Z$/, "Z") : String(ts);
+    }
+    const body: Json = { links: opts.links ?? [], facts: opts.facts ?? [], observed_through: through };
+    const workspaceId = opts.workspaceId || this.workspaceId;
+    if (workspaceId) body.workspace_id = workspaceId;
+    if (opts.contractId) body.contract_id = opts.contractId;
+    if (opts.actionId) body.action_id = opts.actionId;
+    return body;
+  }
+
+  /**
+   * `POST /v1/evidence/batches/preflight`: check a batch and write nothing. The API checks the workspace, the
+   * contract (when `contractId` is given), the key's source scope, every record's source and type, every identity
+   * link and every checkpoint's permission, exactly as `publishBatches` does before it writes. With no option it
+   * checks the key and the workspace alone. Returns `{ok: true, written: false, checks, allowed_sources,
+   * source_bindings, checkpoint_sources}`; a batch that would be refused throws `CommitLayerError` with the code
+   * `preflight_failed`, whose `details` name every problem (`invalid_sources`, `allowed_sources`,
+   * `invalid_fact_types`, `failed_links`, `failed_checkpoints`, `errors`, and `summary` as lines to print).
+   */
+  async preflightBatches(opts: EvidenceBatchOptions = {}): Promise<Json> {
+    return this.call("POST", "/v1/evidence/batches/preflight", this.batchesBody(opts));
+  }
+
+  /**
+   * `POST /v1/evidence/batches`: identity links, records and source checkpoints as one atomic batch. The API
+   * validates all of it first; if any item is invalid or not permitted it throws `CommitLayerError` with the code
+   * `batch_rejected` (`details.written` is false) and nothing is stored: no link, no record, no checkpoint, no
+   * re-verification. Otherwise everything is committed in one transaction. Needs an evidence key; a recorder key is
+   * refused (403). Returns `{status: "committed", written: true, links, facts, checkpoints, counts,
+   * affected_actions, reverify_scheduled, snapshot_versions}`, one result per item; a record already stored comes
+   * back accepted with `status: "duplicate"`, so sending a batch again is safe.
+   */
+  async publishBatches(opts: EvidenceBatchOptions): Promise<Json> {
+    const body = this.batchesBody(opts ?? {});
+    const empty = !(body.links as Json[]).length && !(body.facts as Json[]).length && !Object.keys(body.observed_through as object).length;
+    if (empty) throw new Error("a batch holds at least one fact, link or observedThrough checkpoint");
+    return this.call("POST", "/v1/evidence/batches", body);
   }
 
   /**

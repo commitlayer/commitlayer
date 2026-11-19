@@ -48,12 +48,17 @@ async function exercise(full) {
     });
     await client.pushFacts([{ source: "x" }], { links: [{ a: 1 }], watermarks: { x: "t" } });
     await client.publishBatch({ facts: [{ source: "x" }], observedThrough: { x: "t" } });
+    const every = { facts: [{ source: "x" }], links: [{ a: 1 }], observedThrough: { x: "t" }, actionId: "i", contractId: "c", workspaceId: "w" };
+    await client.preflightBatches(every);
+    await client.publishBatches(every);
     await client.verify({ actionId: "i", action: { action_id: "j" }, facts: [{ source: "x" }], links: [{ a: 1 }], dryRun: true });
     await client.packs.dryRun("p", { w: {} }, { workflow: "w" });
   } else {
     await client.recordAction("c", "s");
     await client.pushFacts([]);
     await client.publishBatch({ observedThrough: { x: "t" } });
+    await client.preflightBatches();
+    await client.publishBatches({ observedThrough: { x: "t" } });
     await client.verify();
     await client.packs.dryRun("p");
   }

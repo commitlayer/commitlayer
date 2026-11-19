@@ -114,12 +114,23 @@ def _sdk_calls(full: bool) -> list[tuple[str, str, dict[str, Any] | None]]:
         )
         c.push_facts([{"source": "x"}], links=[{"a": 1}], watermarks={"x": "2026-01-01T00:00:00Z"})
         c.publish_batch(facts=[{"source": "x"}], observed_through={"x": "2026-01-01T00:00:00Z"})
+        every = {
+            "links": [{"a": 1}],
+            "observed_through": {"x": "2026-01-01T00:00:00Z"},
+            "action_id": "i",
+            "contract_id": "c",
+            "workspace_id": "w",
+        }
+        c.preflight_batches([{"source": "x"}], **every)
+        c.publish_batches([{"source": "x"}], **every)
         c.verify("i", action={"action_id": "j"}, facts=[{"source": "x"}], links=[{"a": 1}], dry_run=True)
         c.packs.dry_run("p", {"w": {}}, workflow="w")
     else:
         c.record_action("c", "s")
         c.push_facts([])
         c.publish_batch(observed_through={"x": "2026-01-01T00:00:00Z"})
+        c.preflight_batches()
+        c.publish_batches(observed_through={"x": "2026-01-01T00:00:00Z"})
         c.verify()
         c.packs.dry_run("p")
     c.get_action("i")

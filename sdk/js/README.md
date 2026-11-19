@@ -32,15 +32,21 @@ import { evidence } from "commitlayer";
 
 const ev = evidence(); // COMMITLAYER_EVIDENCE_KEY from commitlayer-evidence.env
 const now = new Date();
-await ev.pushFacts([], { links: [{ subject_id: "pay_1001", source: "stripe", linked_subject_id: "ord_1001", linked_source: "shopify", link_type: "payment_to_order" }] });
-const result = await ev.publishBatch({
+const batch = {
+  links: [{ subject_id: "pay_1001", source: "stripe", linked_subject_id: "ord_1001", linked_source: "shopify", link_type: "payment_to_order" }],
   facts: [{ source: "stripe", subject_id: "pay_1001", subject_kind: "payment", fact_type: "refund", occurred_at: "2026-11-18T10:42:09Z", attributes: { amount: 40, currency: "usd" } }],
   observedThrough: { stripe: now, shopify: now, zendesk: now }, // every source scanned, even with nothing new
-});
-console.log(result.reverify_scheduled);
+};
+await ev.preflightBatches(batch); // checks everything, writes nothing
+const result = await ev.publishBatches(batch); // one transaction: all of it or none of it
+console.log(result.status, result.counts, result.reverify_scheduled);
 ```
 
-`POST /v1/evidence/batch` refuses a recorder key (403).
+Use the source ids your workspace configured: `preflightBatches()` with no option returns them as `source_bindings`
+and `allowed_sources`. A batch with one invalid item is rejected whole: `CommitLayerError` with the code
+`batch_rejected` (403 when a permission is the reason, else 422), `details.written` false and `details.summary` as
+lines to print. `POST /v1/evidence/batches` refuses a recorder key (403). `publishBatch` (`POST /v1/evidence/batch`)
+is deprecated: it answers per item and is not atomic.
 
 ## Record an action where it happens
 
