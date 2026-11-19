@@ -18,7 +18,7 @@ classifiers = [
   "Programming Language :: Python :: 3.13",
   "Topic :: Software Development :: Libraries",
 ]
-dependencies = ["commitlayer>=0.1.3"]
+dependencies = ["commitlayer>=0.1.4"]
 
 [project.optional-dependencies]
 temporal = ["temporalio>=1.5"]
