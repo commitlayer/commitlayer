@@ -105,7 +105,7 @@ def test_forbidden_paths_are_refused(repo, path):
     f = repo / path
     f.parent.mkdir(parents=True, exist_ok=True)
     f.write_text("changed\n")
-    bump(repo, "recorder-js", "0.1.5")
+    bump(repo, "recorder-js", "9.9.9")
     code, problems, _ = run(repo)
     assert code == rg.EXIT_REFUSED and any(f"`{path}` may not be changed" in p for p in problems)
 
@@ -130,7 +130,7 @@ def test_secret_shaped_additions_are_refused(repo, line):
 @pytest.mark.parametrize("word", ["Written by claude-" + "test-1", "Son" + "net", "OP" + "US"])
 def test_model_names_are_refused(repo, word):
     (repo / "integrations/js/README.md").write_text(f"{word}\n")
-    bump(repo, "integrations-js", "0.1.5")
+    bump(repo, "integrations-js", "9.9.9")
     code, problems, _ = run(repo)
     assert code == rg.EXIT_REFUSED and any("model name" in p for p in problems)
 
@@ -139,7 +139,7 @@ def test_a_shipped_change_without_a_version_bump_is_refused(repo):
     (repo / "recorder/python/README.md").write_text("new\n")
     code, problems, _ = run(repo)
     assert code == rg.EXIT_REFUSED and problems == [
-        "recorder-python: 1 shipped file(s) changed but the version is still 0.1.3"
+        f"recorder-python: 1 shipped file(s) changed but the version is still {current(repo, 'recorder-python')}"
     ]
 
 
