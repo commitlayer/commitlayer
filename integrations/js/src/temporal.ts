@@ -300,7 +300,7 @@ export async function recordActivity(
  *       interceptors: { activity: [commitlayerActivityInterceptors({ mapping })] },
  *     });
  *
- * The client is built on first use from the options or `COMMITLAYER_API_KEY`. For the deprecated
+ * The client is built on first use from the options or `COMMITLAYER_RECORDER_KEY`. For the deprecated
  * `interceptors.activityInbound` list use `(ctx) => commitlayerActivityInterceptors(opts)(ctx).inbound`.
  *
  * A record the API refuses with 429 or 503 and `Retry-After` is sent again by the SDK, twice at most and after
@@ -379,7 +379,7 @@ export function createCommitLayerActivities(options: VerifyActivityOptions = {})
   };
 }
 
-/** `commitlayerVerify` configured from `COMMITLAYER_API_KEY` / `COMMITLAYER_API_URL` on first call. */
+/** `commitlayerVerify` configured from `COMMITLAYER_RECORDER_KEY` / `COMMITLAYER_API_URL` on first call. */
 export const { commitlayerVerify } = createCommitLayerActivities();
 
 /** Validate a mapping loaded from JSON (a config file, an environment variable). Throws on a malformed document. */
