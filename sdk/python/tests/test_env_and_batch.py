@@ -141,6 +141,95 @@ def test_a_recorder_key_is_refused_by_the_batch_with_a_readable_error():
     assert e.value.status == 403 and e.value.code == "insufficient_scope"
 
 
+# ---------------- 0.1.5: the atomic batch and its preflight ----------------
+
+FACT = {"source": "stripe", "subject_id": "pay_1", "fact_type": "refund", "occurred_at": "2026-11-18T09:59:00Z"}
+LINK = {
+    "subject_id": "pay_1",
+    "source": "stripe",
+    "linked_subject_id": "ord_1",
+    "linked_source": "orders",
+    "link_type": "payment_to_order",
+}
+
+
+def test_publish_batches_sends_links_records_and_checkpoints_in_one_request(monkeypatch):
+    answer = {"status": "committed", "written": True, "links": [], "facts": [], "checkpoints": []}
+    t = Fake({"/v1/evidence/batches": (201, answer)})
+    monkeypatch.setenv("COMMITLAYER_WORKSPACE_ID", "ten_1")
+    monkeypatch.setenv("COMMITLAYER_CONTRACT_ID", "scop_refund_order")
+    c = Client(transport=t, role="evidence")
+    when = datetime(2026, 11, 18, 10, 0, tzinfo=timezone.utc)
+    got = c.publish_batches([FACT], links=[LINK], observed_through={"stripe": when, "orders": "2026-11-18T10:00:00Z"})
+    assert got == answer
+    assert t.calls == [
+        (
+            "POST",
+            "/v1/evidence/batches",
+            {
+                "links": [LINK],
+                "facts": [FACT],
+                "observed_through": {"stripe": "2026-11-18T10:00:00Z", "orders": "2026-11-18T10:00:00Z"},
+                # The workspace is the environment file's; the contract is sent only when the caller names it.
+                "workspace_id": "ten_1",
+            },
+        )
+    ]
+    c.publish_batches([FACT], contract_id="scop_refund_order", action_id="refund-ord_1", workspace_id="ten_2")
+    assert t.calls[1][2] == {
+        "links": [],
+        "facts": [FACT],
+        "observed_through": {},
+        "workspace_id": "ten_2",
+        "contract_id": "scop_refund_order",
+        "action_id": "refund-ord_1",
+    }
+
+
+def test_preflight_batches_sends_the_same_body_to_the_preflight_and_may_be_empty():
+    t = Fake({"/v1/evidence/batches/preflight": (200, {"ok": True, "written": False, "source_bindings": []})})
+    c = Client(transport=t)
+    assert c.preflight_batches()["written"] is False
+    c.preflight_batches([FACT], links=[LINK], observed_through={"stripe": "2026-11-18T10:00:00Z"})
+    assert t.calls == [
+        ("POST", "/v1/evidence/batches/preflight", {"links": [], "facts": [], "observed_through": {}}),
+        (
+            "POST",
+            "/v1/evidence/batches/preflight",
+            {"links": [LINK], "facts": [FACT], "observed_through": {"stripe": "2026-11-18T10:00:00Z"}},
+        ),
+    ]
+
+
+def test_an_empty_batch_is_refused_before_it_is_sent_and_a_naive_time_too():
+    t = Fake()
+    c = Client(transport=t)
+    with pytest.raises(ValueError, match="at least one"):
+        c.publish_batches()
+    with pytest.raises(ValueError, match="timezone"):
+        c.publish_batches(observed_through={"stripe": datetime(2026, 1, 1)})
+    assert t.calls == []
+
+
+def test_a_rejected_batch_raises_with_the_structured_error_and_is_never_a_success():
+    details = {
+        "written": False,
+        "summary": ["invalid source: shopify", "allowed sources: orders, stripe, support"],
+        "invalid_sources": ["shopify"],
+        "allowed_sources": ["orders", "stripe", "support"],
+        "invalid_fact_types": [],
+        "failed_links": [],
+        "failed_checkpoints": [],
+    }
+    refused = {"error": {"code": "batch_rejected", "message": "Nothing was written.", "details": details}}
+    for path, method in (("/v1/evidence/batches", "publish_batches"), ("/v1/evidence/batches/preflight", "preflight_batches")):
+        t = Fake({path: (403, refused)})
+        with pytest.raises(CommitLayerError) as e:
+            getattr(Client(transport=t), method)([FACT])
+        assert (e.value.status, e.value.code) == (403, "batch_rejected")
+        assert e.value.details == details and e.value.details["written"] is False
+
+
 def test_the_installed_artifact_reports_its_own_version(tmp_path):
     """The built package, installed on its own, reports the version in pyproject.toml: `__version__` comes from the
     distribution's metadata, never from a constant kept by hand (G5, P3-2)."""

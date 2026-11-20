@@ -1,5 +1,15 @@
 # Changelog: commitlayer (JavaScript / TypeScript)
 
+## 0.1.6
+
+- `publishBatches({ facts, links, observedThrough })`: `POST /v1/evidence/batches`, the atomic evidence batch.
+  Identity links, records and source checkpoints are validated together and stored in one transaction, or not at
+  all: a rejected batch throws `CommitLayerError` with the code `batch_rejected`, `details.written` false, and every
+  problem named (`invalid_sources`, `allowed_sources`, `invalid_fact_types`, `failed_links`, `failed_checkpoints`).
+- `preflightBatches(...)`: `POST /v1/evidence/batches/preflight`, the same checks with nothing written, and the
+  exact source ids the key publishes for (`source_bindings`).
+- `publishBatch` (`POST /v1/evidence/batch`) is deprecated. It still works and still answers per item.
+
 ## 0.1.5
 
 - Dual package: ESM (`import`) and CommonJS (`require`), each with its types, through `exports`. Node 20 or later.

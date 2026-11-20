@@ -94,6 +94,31 @@ def test_push_facts_accepts_the_fact(recorded):
     assert recorded["facts"]["accepted_count"] == 1 and recorded["facts"]["rejected_count"] == 0
 
 
+def test_the_atomic_batch_is_checked_first_and_stored_whole(client, recorded):
+    """0.1.5: `preflight_batches` writes nothing; `publish_batches` answers per item; an invalid batch is refused
+    whole with the structured error."""
+    from commitlayer import CommitLayerError
+
+    fact = {
+        "source": "stripe",
+        "subject_id": recorded["subject"],
+        "subject_kind": "order",
+        "fact_type": "refund",
+        "occurred_at": _now(),
+        "attributes": {"amount": 42.5, "currency": "USD"},
+        "raw_ref": f"live-batches:{RUN}",
+    }
+    pre = client.preflight_batches([fact], observed_through={"stripe": _now()})
+    assert pre["ok"] is True and pre["written"] is False
+    out = client.publish_batches([fact], observed_through={"stripe": _now()})
+    assert out["status"] == "committed" and out["written"] is True
+    assert [f["accepted"] for f in out["facts"]] == [True] and out["counts"]["facts"] == 1
+    assert [c["source"] for c in out["checkpoints"]] == ["stripe"]
+    with pytest.raises(CommitLayerError) as e:
+        client.publish_batches([{**fact, "raw_ref": f"live-batches-bad:{RUN}", "occurred_at": "not-a-time"}])
+    assert e.value.code == "batch_rejected" and e.value.details["written"] is False
+
+
 def test_get_action_is_a_verification_the_verdict_readers_understand(client, recorded):
     from commitlayer_integrations.verdict import summarize_verification
 

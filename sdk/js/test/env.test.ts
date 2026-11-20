@@ -107,6 +107,51 @@ test("a checkpoint alone is a valid batch; one checkpoint is required; a recorde
   await assert.rejects(new Client({ transport: refused.transport, maxRetries: 0 }).publishBatch({ observedThrough: { stripe: "2026-11-18T10:00:00Z" } }), (e: unknown) => e instanceof CommitLayerError && e.status === 403 && e.code === "insufficient_scope");
 });
 
+// ---------------- 0.1.6: the atomic batch and its preflight ----------------
+
+const FACT = { source: "stripe", subject_id: "pay_1", fact_type: "refund", occurred_at: "2026-11-18T09:59:00Z" };
+const LINK = { subject_id: "pay_1", source: "stripe", linked_subject_id: "ord_1", linked_source: "orders", link_type: "payment_to_order" };
+
+test("publishBatches sends links, records and checkpoints in one request", async () => {
+  const answer = { status: "committed", written: true, links: [], facts: [], checkpoints: [] };
+  const t = fake({ "/v1/evidence/batches": { status: 201, json: answer } });
+  const cl = new Client({ transport: t.transport, role: "evidence", workspaceId: "ten_1", contractId: "scop_refund_order" });
+  const when = new Date("2026-11-18T10:00:00.000Z");
+  const got = await cl.publishBatches({ facts: [FACT], links: [LINK], observedThrough: { stripe: when, orders: "2026-11-18T10:00:00Z" } });
+  assert.deepEqual(got, answer);
+  assert.deepEqual(t.calls[0], {
+    method: "POST",
+    path: "/v1/evidence/batches",
+    // The workspace is the client's; the contract is sent only when the caller names it.
+    body: { links: [LINK], facts: [FACT], observed_through: { stripe: "2026-11-18T10:00:00Z", orders: "2026-11-18T10:00:00Z" }, workspace_id: "ten_1" },
+  });
+  await cl.publishBatches({ facts: [FACT], contractId: "scop_refund_order", actionId: "refund-ord_1", workspaceId: "ten_2" });
+  assert.deepEqual(t.calls[1].body, { links: [], facts: [FACT], observed_through: {}, workspace_id: "ten_2", contract_id: "scop_refund_order", action_id: "refund-ord_1" });
+});
+
+test("preflightBatches sends the same body to the preflight and may be empty; an empty batch is never sent", async () => {
+  const t = fake({ "/v1/evidence/batches/preflight": { status: 200, json: { ok: true, written: false, source_bindings: [] } } });
+  const cl = new Client({ transport: t.transport });
+  assert.equal((await cl.preflightBatches()).written, false);
+  await cl.preflightBatches({ facts: [FACT], links: [LINK], observedThrough: { stripe: "2026-11-18T10:00:00Z" } });
+  assert.deepEqual(t.calls.map((c) => [c.path, c.body]), [
+    ["/v1/evidence/batches/preflight", { links: [], facts: [], observed_through: {} }],
+    ["/v1/evidence/batches/preflight", { links: [LINK], facts: [FACT], observed_through: { stripe: "2026-11-18T10:00:00Z" } }],
+  ]);
+  await assert.rejects(cl.publishBatches({}), /at least one/);
+  assert.equal(t.calls.length, 2);
+});
+
+test("a rejected batch throws with the structured error and is never a success", async () => {
+  const details = { written: false, summary: ["invalid source: shopify", "allowed sources: orders, stripe, support"], invalid_sources: ["shopify"], allowed_sources: ["orders", "stripe", "support"] };
+  const refused = { status: 403, json: { error: { code: "batch_rejected", message: "Nothing was written.", details } } };
+  const t = fake({ "/v1/evidence/batches": refused, "/v1/evidence/batches/preflight": refused });
+  const cl = new Client({ transport: t.transport, maxRetries: 0 });
+  for (const call of [() => cl.publishBatches({ facts: [FACT] }), () => cl.preflightBatches({ facts: [FACT] })]) {
+    await assert.rejects(call(), (e: unknown) => e instanceof CommitLayerError && e.status === 403 && e.code === "batch_rejected" && (e.details as { written: boolean }).written === false);
+  }
+});
+
 test("the packed artifact works from require and import and reports the package version", { skip: !existsSync(new URL("../../dist/cjs/index.js", import.meta.url)) && "run `npm run build` first" }, () => {
   const root = new URL("../../", import.meta.url).pathname;
   const version = JSON.parse(readFileSync(join(root, "package.json"), "utf8")).version;

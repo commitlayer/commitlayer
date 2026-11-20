@@ -64,19 +64,29 @@ import commitlayer
 
 ev = commitlayer.evidence()  # COMMITLAYER_EVIDENCE_KEY from commitlayer-evidence.env
 now = datetime.now(timezone.utc)
-ev.push_facts([], links=[{"subject_id": "pay_1001", "source": "stripe", "linked_subject_id": "ord_1001",
-                          "linked_source": "shopify", "link_type": "payment_to_order"}])
-result = ev.publish_batch(
+batch = dict(
+    links=[{"subject_id": "pay_1001", "source": "stripe", "linked_subject_id": "ord_1001",
+            "linked_source": "shopify", "link_type": "payment_to_order"}],
     facts=[
         {"source": "stripe", "subject_id": "pay_1001", "subject_kind": "payment", "fact_type": "refund",
          "occurred_at": "2026-11-18T10:42:09Z", "attributes": {"amount": 40.0, "currency": "usd"}},
     ],
     observed_through={"stripe": now, "shopify": now, "zendesk": now},
 )
-print(result["reverify_scheduled"], [c["accepted"] for c in result["checkpoints"]])
+try:
+    ev.preflight_batches(**batch)          # checks everything, writes nothing
+    result = ev.publish_batches(**batch)   # one transaction: all of it or none of it
+except commitlayer.CommitLayerError as e:
+    for line in (e.details or {}).get("summary", []):
+        print(line)                        # invalid source, allowed sources, invalid fact type, failed link, ...
+    raise
+print(result["status"], result["counts"], result["reverify_scheduled"])
 ```
 
-`POST /v1/evidence/batch` refuses a recorder key (403). Links between records go through `push_facts` first.
+Use the source ids your workspace configured: `preflight_batches()` with no argument returns them as
+`source_bindings` and `allowed_sources`. A batch with one invalid item is rejected whole (`batch_rejected`, 403 when
+a permission is the reason, else 422) and stores nothing. `POST /v1/evidence/batches` refuses a recorder key (403).
+`publish_batch` (`POST /v1/evidence/batch`) is deprecated: it answers per item and is not atomic.
 
 ## Push facts, with a watermark
 

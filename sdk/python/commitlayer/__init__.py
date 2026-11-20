@@ -419,7 +419,10 @@ class Client:
         *,
         observed_through: Mapping[str, str | datetime],
     ) -> dict[str, Any]:
-        """``POST /v1/evidence/batch``: the records a source's backend found and, for every source it scanned, the
+        """Deprecated: use ``publish_batches``, which stores the whole batch or none of it. This route answers per
+        item, so a refused checkpoint does not undo the records sent with it; read every ``accepted``.
+
+        ``POST /v1/evidence/batch``: the records a source's backend found and, for every source it scanned, the
         time it scanned through (``observed_through``: source → RFC 3339 time or an aware ``datetime``), including a
         source with no matching record (``facts`` may be empty). That checkpoint is what lets a verdict settle at
         its deadline without waiting on the clock. Needs an evidence key; a recorder key is refused (403).
@@ -432,6 +435,82 @@ class Client:
             raise ValueError("observed_through names at least one source and the time it was scanned through")
         through = {str(src): _rfc3339(ts) for src, ts in observed_through.items()}
         return self._call("POST", "/v1/evidence/batch", {"facts": list(facts or []), "observed_through": through})
+
+    def _batches_body(
+        self,
+        facts: list[dict[str, Any]] | None,
+        links: list[dict[str, Any]] | None,
+        observed_through: Mapping[str, str | datetime] | None,
+        action_id: str | None,
+        contract_id: str | None,
+        workspace_id: str | None,
+    ) -> dict[str, Any]:
+        body: dict[str, Any] = {
+            "links": list(links or []),
+            "facts": list(facts or []),
+            "observed_through": {str(src): _rfc3339(ts) for src, ts in (observed_through or {}).items()},
+        }
+        for k, v in (
+            ("workspace_id", workspace_id or self.workspace_id),
+            ("contract_id", contract_id),
+            ("action_id", action_id),
+        ):
+            if v:
+                body[k] = v
+        return body
+
+    def preflight_batches(
+        self,
+        facts: list[dict[str, Any]] | None = None,
+        *,
+        links: list[dict[str, Any]] | None = None,
+        observed_through: Mapping[str, str | datetime] | None = None,
+        action_id: str | None = None,
+        contract_id: str | None = None,
+        workspace_id: str | None = None,
+    ) -> dict[str, Any]:
+        """``POST /v1/evidence/batches/preflight``: check a batch and write nothing. The API checks the workspace,
+        the contract (when ``contract_id`` is given), the key's source scope, every record's source and type, every
+        identity link and every checkpoint's permission, exactly as ``publish_batches`` does before it writes. With
+        no argument it checks the key and the workspace alone.
+
+        Returns ``{ok: True, written: False, checks, allowed_sources, source_bindings, checkpoint_sources, ...}``:
+        ``source_bindings`` holds the exact source ids this key publishes for. A batch that would be refused raises
+        ``CommitLayerError`` with the code ``preflight_failed``; its ``details`` name every problem
+        (``invalid_sources``, ``allowed_sources``, ``invalid_fact_types``, ``failed_links``, ``failed_checkpoints``,
+        ``errors``, and ``summary`` as lines to print)."""
+        body = self._batches_body(facts, links, observed_through, action_id, contract_id, workspace_id)
+        return self._call("POST", "/v1/evidence/batches/preflight", body)
+
+    def publish_batches(
+        self,
+        facts: list[dict[str, Any]] | None = None,
+        *,
+        links: list[dict[str, Any]] | None = None,
+        observed_through: Mapping[str, str | datetime] | None = None,
+        action_id: str | None = None,
+        contract_id: str | None = None,
+        workspace_id: str | None = None,
+    ) -> dict[str, Any]:
+        """``POST /v1/evidence/batches``: identity links, records and source checkpoints as one atomic batch. The
+        API validates all of it first; if any item is invalid or not permitted it raises ``CommitLayerError`` with
+        the code ``batch_rejected`` (``details`` as for ``preflight_batches``, with ``written: False``) and nothing
+        is stored: no link, no record, no checkpoint, no re-verification. Otherwise everything is committed in one
+        transaction.
+
+        ``observed_through`` (source → RFC 3339 time or an aware ``datetime``) is the checkpoint of every source
+        scanned, including one with no matching record. ``contract_id`` makes the API check every record's type
+        against what that contract reads; ``action_id`` names the action the batch is evidence for, which must
+        exist. ``workspace_id`` defaults to ``COMMITLAYER_WORKSPACE_ID`` and is checked against the key's
+        workspace. Needs an evidence key; a recorder key is refused (403).
+
+        Returns ``{status: "committed", written: True, links, facts, checkpoints, counts, affected_actions,
+        reverify_scheduled, snapshot_versions}``, one result per item. A record already stored comes back
+        ``accepted`` with ``status: "duplicate"``, so sending a batch again is safe."""
+        if not (facts or links or observed_through):
+            raise ValueError("a batch holds at least one fact, link or observed_through checkpoint")
+        body = self._batches_body(facts, links, observed_through, action_id, contract_id, workspace_id)
+        return self._call("POST", "/v1/evidence/batches", body)
 
     def verify(
         self,
